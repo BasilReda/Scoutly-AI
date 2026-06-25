@@ -119,7 +119,7 @@ class ScouterAgent(BaseAgent):
             except Exception as e:
                 return [{"error": str(e)}]
 
-        task_template = PromptLoader.load("prompts/scouter_task.md")
+        task_template = PromptLoader.get("scouter_task")
         task_prompt = task_template.format(
             query=query,
             salary_min=salary_min,
