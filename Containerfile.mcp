@@ -3,7 +3,7 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir mcp[cli]==1.9.4 asyncpg==0.30.0 python-dotenv==1.0.1
+RUN pip install --no-cache-dir mcp[cli]==1.9.4 aiosqlite==0.20.0 python-dotenv==1.0.1
 
 COPY backend/mcp_server/ ./backend/mcp_server/
 COPY backend/__init__.py .

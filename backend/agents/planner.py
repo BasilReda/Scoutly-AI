@@ -45,12 +45,12 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "run_scouter_agent",
-            "description": "Query the player database via MCP to find 3-5 matching candidates. Requires financial_decision from financial agent.",
+            "description": "Query the player database via MCP to find 3-5 matching candidates. Requires financial_decision, which you can get from run_financial_agent OR construct yourself if the user provided budget constraints.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "The scouting query"},
-                    "financial_decision": {"type": "object", "description": "Output from run_financial_agent"},
+                    "financial_decision": {"type": "object", "description": "Output from run_financial_agent, or a synthesized object containing salary_min, salary_max, value_max based on user input."},
                 },
                 "required": ["query", "financial_decision"],
             },
@@ -69,9 +69,8 @@ TOOLS = [
                         "items": {"type": "object"},
                         "description": "List of player dicts from scouter agent",
                     },
-                    "run_id": {"type": "string", "description": "Unique run ID for chart output"},
                 },
-                "required": ["players", "run_id"],
+                "required": ["players"],
             },
         },
     },
@@ -88,8 +87,8 @@ TOOLS = [
                         "items": {"type": "object"},
                         "description": "List of player dicts",
                     },
-                    "analysis_report": {"type": "string", "description": "Unified analysis report from analysis agent"},
-                    "financial_decision": {"type": "object", "description": "Financial constraints"},
+                    "analysis_report": {"type": "string", "description": "Unified analysis report from analysis agent, or synthesized if skipped"},
+                    "financial_decision": {"type": "object", "description": "Financial constraints (from financial agent or synthesized)"},
                 },
                 "required": ["players", "analysis_report", "financial_decision"],
             },
@@ -109,9 +108,8 @@ TOOLS = [
                     "tactical_summary": {"type": "string"},
                     "charts": {"type": "array", "items": {"type": "string"}},
                     "unified_analysis": {"type": "string"},
-                    "run_id": {"type": "string"},
                 },
-                "required": ["query", "ranked_players", "run_id"],
+                "required": ["query", "ranked_players"],
             },
         },
     },
@@ -160,12 +158,14 @@ class PlannerAgent(BaseAgent):
             return await self.scouter.run(**args)
 
         elif tool_name == "run_analysis_agent":
+            args.pop("run_id", None)   # injected by planner — LLM must not pass it
             return await self.analysis.run(run_id=self.run_id, **args)
 
         elif tool_name == "run_tactical_agent":
             return await self.tactical.run(**args)
 
         elif tool_name == "generate_pdf_report":
+            args.pop("run_id", None)   # injected by planner — LLM must not pass it
             return await self.pdf_gen.generate(run_id=self.run_id, **args)
 
         else:
@@ -192,9 +192,10 @@ class PlannerAgent(BaseAgent):
                 "content": (
                     f"Scouting request: {query}\n\n"
                     f"Run ID: {self.run_id}\n\n"
-                    "Execute the appropriate agent pipeline to fulfill this request. "
-                    "Start with the financial agent, then scouter, analysis, tactical, and finally generate the PDF report. "
-                    "Pass outputs from each agent as inputs to the next."
+                    "Execute the appropriate agent pipeline to fulfill this request based on your Decision Logic. "
+                    "You do NOT need to run every agent if the user already provided the required information. "
+                    "If you skip an agent (e.g. financial_agent because the user gave a budget), you MUST manually construct its expected output JSON to pass into the subsequent agents. "
+                    "Always end with the generate_pdf_report tool once you have gathered everything."
                 ),
             }
         ]

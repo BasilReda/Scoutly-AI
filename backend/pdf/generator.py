@@ -151,6 +151,8 @@ class PDFGenerator:
             loader=FileSystemLoader(str(settings.TEMPLATES_DIR)),
             autoescape=select_autoescape(["html"]),
         )
+        # zfill is a Python str method, not a built-in Jinja2 filter
+        jinja_env.filters["zfill"] = lambda value, width: str(value).zfill(width)
         template = jinja_env.get_template("report.html")
 
         html_content = template.render(

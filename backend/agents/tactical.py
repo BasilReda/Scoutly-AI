@@ -10,6 +10,7 @@ from openai import AsyncOpenAI
 
 from .base import BaseAgent
 from ..utils.config import settings
+from ..utils.prompt_loader import PromptLoader
 
 # Try to import pymupdf for PDF reading
 try:
@@ -98,20 +99,13 @@ class TacticalAgent(BaseAgent):
                 {
                     "role": "user",
                     "content": (
-                        f"You must evaluate and rank {len(players)} football player candidates for tactical fit.\n\n"
-                        f"=== TEAM TACTICAL DOCUMENT ===\n{tactics_text}\n\n"
-                        f"=== STATISTICAL ANALYSIS REPORT ===\n{analysis_report[:3000]}\n\n"
-                        f"=== CANDIDATE PLAYERS ===\n{json.dumps(players, indent=2)}\n\n"
-                        f"=== FINANCIAL CONTEXT ===\n{json.dumps(financial_decision, indent=2)}\n\n"
-                        "Score each player on tactical fit (0–100) using the framework in your instructions. "
-                        "Rank from best to worst. "
-                        "For each player include: rank, name, tactical_fit_score, "
-                        "formation_fit (0-25), style_compatibility (0-25), "
-                        "statistical_benchmark (0-25), squad_balance (0-25), "
-                        "strengths (list), weaknesses (list), tactical_verdict (str), "
-                        "reference_to_tactics (str). "
-                        "Also include a tactical_summary covering all candidates. "
-                        'Return JSON: {"ranked_players": [...], "tactical_summary": "..."}'
+                        PromptLoader.get("tactical_evaluate").format(
+                            player_count=len(players),
+                            tactics_text=tactics_text,
+                            analysis_report=analysis_report[:3000],
+                            players_json=json.dumps(players, indent=2),
+                            financial_json=json.dumps(financial_decision, indent=2)
+                        )
                     ),
                 }
             ]

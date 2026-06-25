@@ -191,7 +191,6 @@ async def list_positions() -> list[str]:
 
 # ── Entry Point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    # FastMCP 1.9.4 — port is set via settings, not as a run() kwarg
     mcp.settings.host = "0.0.0.0"
     mcp.settings.port = MCP_PORT
     mcp.run(transport="sse")

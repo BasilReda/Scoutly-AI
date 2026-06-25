@@ -205,7 +205,7 @@ podman run -d --name football-api \
 ├── frontend/
 │   ├── index.html                 # Premium dark UI
 │   ├── style.css
-│   └── app.js                     # SSE client + pipeline visualizer
+│   └── app.js                     # SSE client + pipeline r
 ├── data/
 │   ├── financial_plan.yaml        # Club financial constraints
 │   ├── tactics.pdf                # Team tactical document (generated)

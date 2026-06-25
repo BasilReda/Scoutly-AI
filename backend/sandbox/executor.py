@@ -62,6 +62,17 @@ with open(DATA_FILE) as _f:
 
 OUTPUT_DIR = CHART_OUTPUT_DIR
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+# ── Patched savefig — always saves to OUTPUT_DIR regardless of what path the
+#    generated code passes. This guarantees charts are never lost in the tmpdir.
+_original_savefig = plt.savefig
+def _safe_savefig(fname, *args, **kwargs):
+    fname = os.path.join(OUTPUT_DIR, os.path.basename(str(fname)))
+    kwargs.setdefault("dpi", 150)
+    kwargs.setdefault("bbox_inches", "tight")
+    _original_savefig(fname, *args, **kwargs)
+    print(f"CHART_SAVED:{fname}", flush=True)
+plt.savefig = _safe_savefig
 """
 
 
@@ -100,7 +111,17 @@ async def run_visualization_code(
             f'DATA_FILE = r"{data_file}"\n'
             f'CHART_OUTPUT_DIR = r"{chart_dir}"\n'
         )
-        full_script = constants + _PREAMBLE + "\n\n" + textwrap.dedent(code)
+        user_code = textwrap.dedent(code)
+        wrapped_user_code = (
+            "import traceback as _tb\n"
+            "try:\n"
+            + "\n".join("    " + line for line in user_code.splitlines())
+            + "\n"
+            "except Exception as _e:\n"
+            "    print('SCRIPT_ERROR:', _tb.format_exc(), file=sys.stderr, flush=True)\n"
+            "    sys.exit(1)\n"
+        )
+        full_script = constants + _PREAMBLE + "\n\n" + wrapped_user_code
 
         script_file = os.path.join(tmpdir, f"viz_{uuid.uuid4().hex[:8]}.py")
         with open(script_file, "w", encoding="utf-8") as f:
@@ -135,18 +156,33 @@ async def run_visualization_code(
                 "stderr": str(exc),
             }
 
-    # Collect generated chart files
-    charts: list[str] = []
-    if chart_dir.exists():
+    stdout_text = stdout_bytes.decode("utf-8", errors="replace")
+    stderr_text = stderr_bytes.decode("utf-8", errors="replace")
+
+    # Collect charts — prefer the CHART_SAVED markers in stdout (most reliable),
+    # fall back to scanning the directory.
+    charts: list[str] = [
+        line[len("CHART_SAVED:"):].strip()
+        for line in stdout_text.splitlines()
+        if line.startswith("CHART_SAVED:")
+    ]
+    if not charts and chart_dir.exists():
         charts = [
             str(chart_dir / f)
             for f in sorted(os.listdir(chart_dir))
             if f.lower().endswith(".png")
         ]
 
+    # If the script failed and we have no charts, surface the full output so
+    # the caller can see what went wrong.
+    if not success and not charts:
+        error_detail = (stderr_text + "\n" + stdout_text).strip() or "Script exited non-zero with no output"
+    else:
+        error_detail = stderr_text
+
     return {
-        "success": success,
+        "success": success or bool(charts),  # charts produced = effectively success
         "charts": charts,
-        "stdout": stdout_bytes.decode("utf-8", errors="replace"),
-        "stderr": stderr_bytes.decode("utf-8", errors="replace"),
+        "stdout": stdout_text,
+        "stderr": error_detail,
     }

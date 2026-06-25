@@ -9,6 +9,7 @@ from mcp.client.sse import sse_client
 
 from .base import BaseAgent
 from ..utils.config import settings
+from ..utils.prompt_loader import PromptLoader
 
 
 class ScouterAgent(BaseAgent):
@@ -22,18 +23,53 @@ class ScouterAgent(BaseAgent):
     async def _call_mcp_tool(self, tool_name: str, params: dict) -> Any:
         """Connect to the MCP server and call a single tool."""
         mcp_url = settings.MCP_SERVER_URL
-        async with sse_client(mcp_url) as (read, write):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                result = await session.call_tool(tool_name, params)
-                # result.content is a list of TextContent objects
-                if result.content:
-                    raw = result.content[0].text
-                    try:
-                        return json.loads(raw)
-                    except (json.JSONDecodeError, TypeError):
-                        return raw
-                return None
+        result_data: Any = None
+
+        try:
+            async with sse_client(mcp_url) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    result = await session.call_tool(tool_name, params)
+                    if result.content:
+                        if len(result.content) == 1:
+                            # Single-item result (dict, str, int, …)
+                            raw = result.content[0].text
+                            try:
+                                result_data = json.loads(raw)
+                            except (json.JSONDecodeError, TypeError):
+                                try:
+                                    import ast
+                                    result_data = ast.literal_eval(raw)
+                                except Exception:
+                                    result_data = raw
+                        else:
+                            # mcp >= 1.10 serialises list results as one block per item
+                            result_data = []
+                            for block in result.content:
+                                try:
+                                    result_data.append(json.loads(block.text))
+                                except (json.JSONDecodeError, TypeError):
+                                    try:
+                                        import ast
+                                        result_data.append(ast.literal_eval(block.text))
+                                    except Exception:
+                                        result_data.append(block.text)
+        except BaseException as exc:
+            # mcp >= 1.10 raises an ExceptionGroup during SSE connection cleanup,
+            # even when the tool call succeeded. If we already received data,
+            # the error is a benign teardown race — ignore it.
+            if result_data is not None:
+                return result_data
+            # Real failure: unwrap and surface the inner exception
+            inner: BaseException = exc
+            if hasattr(exc, "exceptions") and exc.exceptions:
+                inner = exc.exceptions[0]
+            raise RuntimeError(
+                f"MCP call '{tool_name}' to {mcp_url} failed — "
+                f"{type(inner).__name__}: {inner}"
+            ) from inner
+
+        return result_data
 
     # ── Main Run ──────────────────────────────────────────────────────────────
 
@@ -67,14 +103,12 @@ class ScouterAgent(BaseAgent):
                 {
                     "role": "user",
                     "content": (
-                        f"Scouting query: {query}\n"
-                        f"Financial constraints: salary_min={salary_min}, salary_max={salary_max}, value_max={value_max}\n\n"
-                        "Extract structured search parameters from this query. "
-                        "Return a JSON object with these optional keys: "
-                        "position (str, e.g. ST/CM/CB/LW/RW/CAM/CDM/LB/RB/GK), "
-                        "max_age (int), min_age (int), nationality (str), "
-                        "min_goals (float), min_rating (int, default 78), limit (int, default 10). "
-                        "Always include salary constraints from the financial data."
+                        PromptLoader.get("scouter_search_params").format(
+                            query=query,
+                            salary_min=salary_min,
+                            salary_max=salary_max,
+                            value_max=value_max,
+                        )
                     ),
                 }
             ]
@@ -102,31 +136,37 @@ class ScouterAgent(BaseAgent):
             search_params.pop("min_rating", None)
             raw_players = await self._call_mcp_tool("search_players", search_params) or []
 
-        await self.emit_progress(f"Database returned {len(raw_players)} candidates — shortlisting best 3–5...")
-
-        # Step 3 — Let the LLM shortlist and add scout notes
-        shortlist_result = await self.chat_json(
-            messages=[
-                {
-                    "role": "user",
-                    "content": (
-                        f"Original scouting query: {query}\n"
-                        f"Financial constraints: salary_max={salary_max}/week, value_max={value_max}\n\n"
-                        f"Candidate players from database:\n"
-                        f"{json.dumps(raw_players, indent=2)}\n\n"
-                        "Shortlist the best 3 to 5 players that best match the query. "
-                        "For each selected player, add a 'scout_note' field (1-2 sentences) "
-                        "explaining why they match. Return JSON: "
-                        '{"players": [<selected player dicts with scout_note added>]}'
-                    ),
-                }
-            ]
+        # Step 3 — Pick top 5 from DB results (no LLM — avoids hallucination)
+        # The MCP server already orders by performance DESC, so just take the best.
+        shortlist = raw_players[:5]
+        await self.emit_progress(
+            f"Database returned {len(raw_players)} candidates — taking top {len(shortlist)}"
         )
 
-        players = shortlist_result.get("players", raw_players[:5])
+        # Step 4 — LLM writes scout_note ONLY; player data is never modified
+        await self.emit_progress("Generating scouting notes for each player...")
+        players = []
+        for player in shortlist:
+            note_result = await self.chat_json(
+                messages=[
+                    {
+                        "role": "user",
+                        "content": (
+                            PromptLoader.get("scouter_note").format(
+                                query=query,
+                                player_json=json.dumps(player, indent=2)
+                            )
+                        ),
+                    }
+                ]
+            )
+            # Keep the original DB record untouched; only append the note
+            enriched = dict(player)
+            enriched["scout_note"] = note_result.get("scout_note", "No note generated.")
+            players.append(enriched)
 
         await self.emit_complete(
-            f"Shortlisted {len(players)} candidate players",
+            f"Shortlisted {len(players)} verified players from database",
             {"count": len(players), "names": [p.get("name") for p in players]},
         )
         return {"players": players}

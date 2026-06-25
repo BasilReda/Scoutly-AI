@@ -37,6 +37,9 @@ Trigger when user asks about budget or salary capacity:
 Trigger when user asks about team fit or formation:
 `tactical_agent → generate_pdf_report`
 
+### Pre-provided Information
+If the user's query already provides explicit data (e.g., a strict budget limit, or specific analysis text), you may **SKIP** the relevant agent (e.g., skip `financial_agent`). When doing so, you must manually construct the expected output JSON of the skipped agent and pass it directly to the next agent in the pipeline.
+
 ## Communication Style
 - Be decisive and efficient. Do not ask clarifying questions unless the request is completely ambiguous.
 - When delegating, provide complete, structured inputs to each agent.

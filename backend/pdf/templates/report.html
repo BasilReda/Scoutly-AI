@@ -570,7 +570,7 @@
       <span class="section-page-num">Page 2</span>
     </div>
 
-    <div class="exec-summary">{{ narratives.executive_summary }}</div>
+    <div class="exec-summary">{{ narratives.executive_summary | default('') }}</div>
 
     <div class="stat-grid">
       <div class="stat-card">
@@ -630,7 +630,7 @@
     </table>
 
     <div style="font-size: 8.5pt; color: var(--muted); line-height: 1.7;">
-      {{ narratives.financial_section }}
+      {{ narratives.financial_section | default('') }}
     </div>
   </div>
 </div>
@@ -738,7 +738,7 @@
 
       <!-- Narrative -->
       <div class="player-narrative">
-        {{ narratives.player_narratives.get(player.get("name", ""), player.get("scout_note", "")) }}
+        {{ (narratives.player_narratives | default({})).get(player.get("name", ""), player.get("scout_note", "")) }}
       </div>
 
       <!-- Financial Badge -->
@@ -758,7 +758,7 @@
 <div class="page">
   <div class="section-page">
     <div class="section-header">
-      <span class="section-tag">{{ player_count + 2 | string | zfill(2) }}</span>
+      <span class="section-tag">{{ (player_count + 2) | string | zfill(2) }}</span>
       <span class="section-title">Visual Analytics</span>
     </div>
 
@@ -786,14 +786,14 @@
 <div class="page">
   <div class="section-page">
     <div class="section-header">
-      <span class="section-tag">{{ player_count + 3 | string | zfill(2) }}</span>
+      <span class="section-tag">{{ (player_count + 3) | string | zfill(2) }}</span>
       <span class="section-title">Tactical Appendix &amp; Conclusion</span>
     </div>
 
     <!-- Tactical Appendix -->
     <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin-bottom: 24px;">
       <div style="font-size: 9pt; font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px;">Team Tactical System</div>
-      <div style="font-size: 9pt; color: var(--text); line-height: 1.7;">{{ narratives.tactical_appendix }}</div>
+      <div style="font-size: 9pt; color: var(--text); line-height: 1.7;">{{ narratives.tactical_appendix | default('') }}</div>
     </div>
 
     <!-- Tactical Summary -->
@@ -808,7 +808,7 @@
     <div class="conclusion-box">
       <h3>📋 Final Recommendation</h3>
       <div style="font-size: 9.5pt; color: var(--text); line-height: 1.8;">
-        {{ narratives.conclusion }}
+        {{ narratives.conclusion | default('') }}
       </div>
       <div class="confidence-badge confidence-high">✓ High Confidence Recommendation</div>
     </div>
