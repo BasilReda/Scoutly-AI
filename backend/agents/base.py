@@ -135,8 +135,8 @@ class BaseAgent(ABC):
                                 preview = content_str[:100] + "..." if len(content_str) > 100 else content_str
                             await self.emit_progress(f"[{self.AGENT_NAME}] Tool result [{tool_name}]: {preview}")
                         elif kind == "AIMessage" and content and isinstance(content, str):
+                            final_report = content
                             if len(content) > 50:
-                                final_report = content
                                 await self.emit_progress(f"[{self.AGENT_NAME}] Reasoning: {content[:150]}...")
         except Exception as exc:
             await self.emit_error(f"[{self.AGENT_NAME}] Deep agent error", str(exc))

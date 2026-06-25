@@ -127,7 +127,8 @@ class ScouterAgent(BaseAgent):
             f"- Max Value: {value_max}\n\n"
             f"Use the `query_player_database` tool to search for candidates. "
             f"If the tool returns empty, try again with slightly relaxed constraints (e.g. increase max_wage by 15%, drop rating). "
-            f"Pick up to 5 candidates from the results. If you cannot find 5 candidates after a few tries, just return the ones you found. For each candidate, append a 'scout_note' field to their data dictionary with a brief justification of why they fit. "
+            f"CRITICAL ANTI-LOOPING RULE: The tool CANNOT filter by age, preferred foot, or specific playstyles. If the tool returns candidates, YOU MUST select the closest matches from them. Do NOT call the tool over and over if it returns the same players. Call the tool at most 2-3 times. "
+            f"Pick up to 5 candidates from the results. If you cannot find a perfect match, just return the closest ones you found. For each candidate, append a 'scout_note' field to their data dictionary with a brief justification of why they fit. "
             f"CRITICAL: Your final response MUST be ONLY valid JSON containing the final list of players in this exact format:\n"
             f'{{"players": [ {{ "id": 1, "name": "...", "scout_note": "..." }} ]}}\n'
             f"Do not output markdown codeblocks, just the raw JSON."

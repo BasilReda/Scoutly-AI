@@ -276,8 +276,8 @@ class AnalysisAgent:
                                 preview = content_str[:100] + "..." if len(content_str) > 100 else content_str
                             await self.emit_progress(f"Tool result [{tool_name}]: {preview}")
                         elif kind == "AIMessage" and content and isinstance(content, str):
+                            report = content
                             if len(content) > 100:
-                                report = content
                                 await self.emit_progress(f"Agent reasoning: {content[:150]}...")
 
         except Exception as exc:

@@ -180,8 +180,8 @@ class PlannerAgent(BaseAgent):
                                 preview = content_str[:100] + "..." if len(content_str) > 100 else content_str
                             await self.emit_progress(f"Tool finished [{tool_name}]: {preview}")
                         elif kind == "AIMessage" and content and isinstance(content, str):
+                            final_summary = content
                             if len(content) > 50:
-                                final_summary = content
                                 await self.emit_progress(f"Planner Reasoning: {content[:150]}...")
         except Exception as exc:
             await self.emit_error("Planner Deep agent error", str(exc))
