@@ -88,8 +88,17 @@ def make_azure_client():
     Import here to avoid circular imports.
     """
     from openai import AsyncAzureOpenAI
-    return AsyncAzureOpenAI(
+    client = AsyncAzureOpenAI(
         api_key=settings.AZURE_OPENAI_API_KEY,
         api_version=settings.AZURE_OPENAI_API_VERSION,
         azure_endpoint=settings.AZURE_OPENAI_ENDPOINT,
     )
+
+    if os.getenv("LANGCHAIN_TRACING_V2", "").lower() == "true" or os.getenv("LANGSMITH_TRACING", "").lower() == "true":
+        try:
+            from langsmith import wrappers
+            client = wrappers.wrap_openai(client)
+        except ImportError:
+            pass
+
+    return client

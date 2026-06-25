@@ -9,6 +9,7 @@ openai==1.57.0
 langchain-openai
 langchain-core
 deepagents
+langsmith
 
 # ── MCP ────────────────────────────────────────────────────────────────────────
 mcp[cli]==1.9.4

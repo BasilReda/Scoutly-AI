@@ -60,7 +60,7 @@ async def search_players(
     nationality: Optional[str] = None,
     min_goals: Optional[float] = None,
     limit: int = 10,
-) -> list[dict]:
+) -> str:
     """
     Search players using one or more filters.
 
@@ -121,11 +121,11 @@ async def search_players(
         cursor = await db.execute(sql, params)
         rows = await cursor.fetchall()
 
-    return [_row_to_dict(r) for r in rows]
+    return json.dumps([_row_to_dict(r) for r in rows])
 
 
 @mcp.tool()
-async def get_player_stats(player_id: int) -> dict:
+async def get_player_stats(player_id: int) -> str:
     """
     Get the full statistical profile for a specific player by ID.
 
@@ -140,11 +140,11 @@ async def get_player_stats(player_id: int) -> dict:
         cursor = await db.execute("SELECT * FROM players WHERE id = ?", (player_id,))
         row = await cursor.fetchone()
 
-    return _row_to_dict(row) if row else {}
+    return json.dumps(_row_to_dict(row) if row else {})
 
 
 @mcp.tool()
-async def query_players(sql: str) -> list[dict]:
+async def query_players(sql: str) -> str:
     """
     Execute a custom read-only SQL query against the players table.
     Only SELECT statements are permitted.
@@ -168,11 +168,11 @@ async def query_players(sql: str) -> list[dict]:
         cursor = await db.execute(sql)
         rows = await cursor.fetchall()
 
-    return [_row_to_dict(r) for r in rows]
+    return json.dumps([_row_to_dict(r) for r in rows])
 
 
 @mcp.tool()
-async def list_positions() -> list[str]:
+async def list_positions() -> str:
     """
     Return all distinct player positions available in the database.
 
@@ -186,7 +186,7 @@ async def list_positions() -> list[str]:
         )
         rows = await cursor.fetchall()
 
-    return [r["position"] for r in rows]
+    return json.dumps([r["position"] for r in rows])
 
 
 # ── Entry Point ───────────────────────────────────────────────────────────────

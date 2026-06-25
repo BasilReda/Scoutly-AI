@@ -215,7 +215,7 @@ class AnalysisAgent:
         agent = create_deep_agent(
             model=llm,
             tools=[run_python_script, describe_image, list_files],
-            system_prompt=PromptLoader.get("analysis"),
+            instructions=PromptLoader.get("analysis"),
         )
 
         task = (
