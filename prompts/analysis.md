@@ -109,6 +109,8 @@ STEP 3 — Call list_files(output_dir) to confirm all 5 PNGs are present.
 
 STEP 4 — Call describe_image on EACH chart PNG to extract insights.
 
+**CRITICAL ANTI-HALLUCINATION RULE:** If the input JSON contains an empty list of players (`[]`), YOU MUST NOT run any Python scripts or hallucinate any charts or data. Instead, you MUST immediately return the following exact markdown: "There were no players fitting because players not existing or requirements didn't meet based on query and plan." Do not generate any other text.
+
 STEP 5 — Write the final scouting report using this markdown structure:
 
 # Scouting Analysis Report

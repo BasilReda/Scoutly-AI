@@ -86,6 +86,8 @@ class PlannerAgent(BaseAgent):
         @tool
         async def run_analysis_agent(players: list[dict]) -> dict:
             """Perform deep statistical analysis and generate 6 visualizations for candidate players."""
+            if not players:
+                return {"unified_report": "There were no players fitting because players not existing or requirements didn't meet based on query and plan."}
             res = await self.analysis.run(players=players, run_id=self.run_id)
             pipeline_state["analysis"] = res
             return res
@@ -93,6 +95,8 @@ class PlannerAgent(BaseAgent):
         @tool
         async def run_tactical_agent(players: list[dict], analysis_report: str, financial_decision: dict) -> dict:
             """Evaluate players against team tactics PDF and rank them by tactical fit."""
+            if not players:
+                return {"ranked_players": [], "tactical_summary": "There were no players fitting because players not existing or requirements didn't meet based on query and plan."}
             res = await self.tactical.run(
                 players=players, analysis_report=analysis_report, financial_decision=financial_decision
             )

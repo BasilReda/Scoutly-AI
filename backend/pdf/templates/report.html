@@ -594,6 +594,13 @@
       <span class="section-page-num">Page 2</span>
     </div>
 
+    {% if not ranked_players %}
+      <div class="exec-summary" style="border-color: #ef4444; background: rgba(239, 68, 68, 0.05); color: #f87171; text-align: center; padding: 40px; font-size: 14pt;">
+        {{ unified_analysis }}
+      </div>
+    </div>
+    {% else %}
+
     <div class="exec-summary">{{ narratives.executive_summary | default('') }}</div>
 
     <div class="stat-grid">
@@ -862,6 +869,7 @@
     </div>
   </div>
 </div>
+{% endif %}
 
 </body>
 </html>
