@@ -24,98 +24,6 @@ from ..utils.prompt_loader import PromptLoader
 from ..utils.config import settings
 
 
-# ── OpenAI Tool Schemas ───────────────────────────────────────────────────────
-TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "run_financial_agent",
-            "description": "Analyze the club's financial plan and determine salary thresholds for scouting. Call this first when scouting players.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "The original scouting query"},
-                    "position": {"type": "string", "description": "Target player position (e.g. ST, CM, CB)"},
-                },
-                "required": ["query"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "run_scouter_agent",
-            "description": "Query the player database via MCP to find 3-5 matching candidates. Requires financial_decision, which you can get from run_financial_agent OR construct yourself if the user provided budget constraints.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "The scouting query"},
-                    "financial_decision": {"type": "object", "description": "Output from run_financial_agent, or a synthesized object containing salary_min, salary_max, value_max based on user input."},
-                },
-                "required": ["query", "financial_decision"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "run_analysis_agent",
-            "description": "Perform deep statistical analysis and generate 6 visualizations for candidate players.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "players": {
-                        "type": "array",
-                        "items": {"type": "object"},
-                        "description": "List of player dicts from scouter agent",
-                    },
-                },
-                "required": ["players"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "run_tactical_agent",
-            "description": "Evaluate players against team tactics PDF and rank them by tactical fit.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "players": {
-                        "type": "array",
-                        "items": {"type": "object"},
-                        "description": "List of player dicts",
-                    },
-                    "analysis_report": {"type": "string", "description": "Unified analysis report from analysis agent, or synthesized if skipped"},
-                    "financial_decision": {"type": "object", "description": "Financial constraints (from financial agent or synthesized)"},
-                },
-                "required": ["players", "analysis_report", "financial_decision"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "generate_pdf_report",
-            "description": "Generate the final PDF scouting report with all data, charts, and narratives.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string"},
-                    "ranked_players": {"type": "array", "items": {"type": "object"}},
-                    "financial_decision": {"type": "object"},
-                    "tactical_summary": {"type": "string"},
-                    "charts": {"type": "array", "items": {"type": "string"}},
-                    "unified_analysis": {"type": "string"},
-                },
-                "required": ["query", "ranked_players"],
-            },
-        },
-    },
-]
-
-
 class PlannerAgent(BaseAgent):
     AGENT_NAME = "planner"
 
@@ -146,125 +54,149 @@ class PlannerAgent(BaseAgent):
             + f"\n\n## Currently Available Agent Prompts (loaded at runtime)\n{manifest_text}"
         )
 
-    # ── Tool Dispatcher ───────────────────────────────────────────────────────
-
-    async def _dispatch_tool(self, tool_name: str, args: dict) -> Any:
-        """Route a tool call from GPT-4o to the correct agent."""
-
-        if tool_name == "run_financial_agent":
-            return await self.financial.run(**args)
-
-        elif tool_name == "run_scouter_agent":
-            return await self.scouter.run(**args)
-
-        elif tool_name == "run_analysis_agent":
-            args.pop("run_id", None)   # injected by planner — LLM must not pass it
-            return await self.analysis.run(run_id=self.run_id, **args)
-
-        elif tool_name == "run_tactical_agent":
-            return await self.tactical.run(**args)
-
-        elif tool_name == "generate_pdf_report":
-            args.pop("run_id", None)   # injected by planner — LLM must not pass it
-            return await self.pdf_gen.generate(run_id=self.run_id, **args)
-
-        else:
-            raise ValueError(f"Unknown tool: {tool_name}")
-
-    # ── Main Orchestration Loop ───────────────────────────────────────────────
+    # ── DeepAgents Implementation ────────────────────────────────────────────────
 
     async def run(self, query: str, **kwargs) -> dict[str, Any]:
         """
-        Run the full agentic pipeline for a scouting query.
-
-        Args:
-            query: Natural language scouting request.
-
-        Returns:
-            {"pdf_path": str, "summary": str, "ranked_players": list}
+        Run the full agentic pipeline for a scouting query using a deep agent.
         """
         await self.emit_start(f"Planner received query: '{query}'")
         await self.emit_progress("Analysing query and planning agent pipeline...")
 
-        messages: list[dict] = [
-            {
-                "role": "user",
-                "content": (
-                    f"Scouting request: {query}\n\n"
-                    f"Run ID: {self.run_id}\n\n"
-                    "Execute the appropriate agent pipeline to fulfill this request based on your Decision Logic. "
-                    "You do NOT need to run every agent if the user already provided the required information. "
-                    "If you skip an agent (e.g. financial_agent because the user gave a budget), you MUST manually construct its expected output JSON to pass into the subsequent agents. "
-                    "Always end with the generate_pdf_report tool once you have gathered everything."
-                ),
-            }
-        ]
+        from langchain_core.tools import tool
+        from deepagents import create_deep_agent
+        from ..utils.config import get_langchain_azure_llm
 
-        # ── Agentic Loop: keep calling tools until GPT-4o stops ──────────
-        pipeline_state: dict[str, Any] = {}
-        max_iterations = 10
+        pipeline_state = {}
 
-        for iteration in range(max_iterations):
-            response = await self.client.chat.completions.create(
-                model=settings.OPENAI_MODEL,
-                messages=[{"role": "system", "content": self.system_prompt}, *messages],
-                tools=TOOLS,
-                tool_choice="auto",
-                temperature=0.2,
+        @tool
+        async def run_financial_agent(query: str, position: str = None) -> dict:
+            """Analyze the club's financial plan and determine salary thresholds for scouting. Call this first when scouting players."""
+            res = await self.financial.run(query=query, position=position)
+            pipeline_state["financial"] = res
+            return res
+
+        @tool
+        async def run_scouter_agent(query: str, financial_decision: dict) -> dict:
+            """Query the player database via MCP to find 3-5 matching candidates. Requires financial_decision."""
+            res = await self.scouter.run(query=query, financial_decision=financial_decision)
+            pipeline_state["scouter"] = res
+            return res
+
+        @tool
+        async def run_analysis_agent(players: list[dict]) -> dict:
+            """Perform deep statistical analysis and generate 6 visualizations for candidate players."""
+            res = await self.analysis.run(players=players, run_id=self.run_id)
+            pipeline_state["analysis"] = res
+            return res
+
+        @tool
+        async def run_tactical_agent(players: list[dict], analysis_report: str, financial_decision: dict) -> dict:
+            """Evaluate players against team tactics PDF and rank them by tactical fit."""
+            res = await self.tactical.run(
+                players=players, analysis_report=analysis_report, financial_decision=financial_decision
             )
+            pipeline_state["tactical"] = res
+            return res
 
-            choice = response.choices[0]
-            msg = choice.message
+        @tool
+        async def generate_pdf_report(
+            query: str = "", 
+            ranked_players: list[dict] = None, 
+            financial_decision: dict = None, 
+            tactical_summary: str = "", 
+            charts: list[str] = None, 
+            unified_analysis: str = "",
+            unified_report: str = ""
+        ) -> dict:
+            """Generate the final PDF scouting report with all data, charts, and narratives."""
+            res = await self.pdf_gen.generate(
+                run_id=self.run_id,
+                query=query,
+                ranked_players=ranked_players or [],
+                financial_decision=financial_decision or {},
+                tactical_summary=tactical_summary,
+                charts=charts or [],
+                unified_analysis=unified_analysis or unified_report
+            )
+            pipeline_state["pdf"] = res
+            return res
 
-            # Append assistant message
-            messages.append({"role": "assistant", "content": msg.content or "", "tool_calls": [
-                {
-                    "id": tc.id,
-                    "type": "function",
-                    "function": {"name": tc.function.name, "arguments": tc.function.arguments},
-                }
-                for tc in (msg.tool_calls or [])
-            ] if msg.tool_calls else []})
+        llm = get_langchain_azure_llm()
+        agent = create_deep_agent(
+            model=llm,
+            tools=[run_financial_agent, run_scouter_agent, run_analysis_agent, run_tactical_agent, generate_pdf_report],
+            instructions=self.system_prompt,
+        )
 
-            # If no tool calls → LLM is done
-            if not msg.tool_calls:
-                await self.emit_progress("Planner completed orchestration", {"summary": msg.content})
-                break
+        task_prompt = (
+            f"Scouting request: {query}\n\n"
+            f"Run ID: {self.run_id}\n\n"
+            "Execute the appropriate agent pipeline to fulfill this request based on your Decision Logic. "
+            "You do NOT need to run every agent if the user already provided the required information. "
+            "If you skip an agent (e.g. financial_agent because the user gave a budget), you MUST manually construct its expected output JSON to pass into the subsequent agents. "
+            "Always end with the generate_pdf_report tool once you have gathered everything.\n"
+        )
 
-            # Execute each requested tool call
-            for tool_call in msg.tool_calls:
-                fn_name = tool_call.function.name
-                fn_args = json.loads(tool_call.function.arguments)
+        final_summary = ""
+        try:
+            async for event in agent.astream({"messages": task_prompt}, stream_mode="updates"):
+                if not isinstance(event, dict): continue
+                for node, state in event.items():
+                    if not isinstance(state, dict): continue
+                    for msg in (state.get("messages") or []):
+                        if msg is None: continue
+                        kind = type(msg).__name__
+                        content = getattr(msg, "content", "") or ""
+                        tool_calls = getattr(msg, "tool_calls", []) or []
 
-                await self.emit_progress(f"Delegating to: {fn_name}", fn_args)
+                        if tool_calls:
+                            for tc in tool_calls:
+                                if not isinstance(tc, dict): continue
+                                name = tc.get("name", "")
+                                args = tc.get("args", {})
+                                formatted_args = ", ".join(f"{k}={v}" for k, v in args.items())
+                                await self.emit_progress(f"Delegating to: {name}({formatted_args})")
+                        elif kind == "ToolMessage":
+                            tool_name = getattr(msg, "name", "tool")
+                            content_str = str(content)
+                            try:
+                                parsed = json.loads(content_str)
+                                if isinstance(parsed, list):
+                                    preview = f"Returned {len(parsed)} items."
+                                    if parsed and isinstance(parsed[0], dict) and "name" in parsed[0]:
+                                        names = [p.get('name', 'Unknown') for p in parsed[:3]]
+                                        preview += f" Top: {', '.join(names)}"
+                                elif isinstance(parsed, dict):
+                                    if "players" in parsed:
+                                        preview = f"Returned {len(parsed['players'])} players."
+                                    elif "ranked_players" in parsed:
+                                        preview = f"Ranked {len(parsed['ranked_players'])} players."
+                                    else:
+                                        preview = f"Returned keys: {', '.join(parsed.keys())}"
+                                else:
+                                    preview = str(parsed)[:100]
+                            except Exception:
+                                preview = content_str[:100] + "..." if len(content_str) > 100 else content_str
+                            await self.emit_progress(f"Tool finished [{tool_name}]: {preview}")
+                        elif kind == "AIMessage" and content and isinstance(content, str):
+                            if len(content) > 50:
+                                final_summary = content
+                                await self.emit_progress(f"Planner Reasoning: {content[:150]}...")
+        except Exception as exc:
+            await self.emit_error("Planner Deep agent error", str(exc))
+            raise
 
-                try:
-                    result = await self._dispatch_tool(fn_name, fn_args)
-                except Exception as exc:
-                    result = {"error": str(exc)}
-                    await self.emit_error(f"Tool {fn_name} failed", str(exc))
-
-                # Store results for final output
-                pipeline_state[fn_name] = result
-
-                # Feed tool result back to the conversation
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "content": json.dumps(result, default=str)[:8000],  # Truncate for context
-                })
-
-        # ── Extract final outputs ─────────────────────────────────────────
-        pdf_result = pipeline_state.get("generate_pdf_report", {})
-        scouter_result = pipeline_state.get("run_scouter_agent", {})
-        tactical_result = pipeline_state.get("run_tactical_agent", {})
+        tactical_res = pipeline_state.get("tactical", {})
+        scouter_res = pipeline_state.get("scouter", {})
+        pdf_res = pipeline_state.get("pdf", {})
 
         final = {
             "run_id": self.run_id,
-            "pdf_path": pdf_result.get("pdf_path", ""),
-            "summary": messages[-1].get("content", "") if messages else "",
-            "ranked_players": tactical_result.get("ranked_players", scouter_result.get("players", [])),
+            "pdf_path": pdf_res.get("pdf_path", ""),
+            "summary": final_summary,
+            "ranked_players": tactical_res.get("ranked_players", scouter_res.get("players", [])),
         }
 
-        await self.emit_complete("Pipeline complete — PDF report ready!", final)
+        await self.emit_complete("Pipeline complete — PDF report ready!")
         return final

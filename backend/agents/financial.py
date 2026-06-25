@@ -28,44 +28,32 @@ class FinancialAgent(BaseAgent):
     async def run(self, query: str, position: str | None = None, **kwargs) -> dict[str, Any]:
         """
         Analyze the club's financial plan and return salary thresholds for scouting.
-
-        Args:
-            query:    The original scouting query from the Planner.
-            position: Target position (e.g. 'ST', 'CM'). Derived from query if not given.
-
-        Returns:
-            {
-                salary_min, salary_max, value_max,
-                adjustment_up_pct, adjustment_down_pct,
-                position_cap, remaining_wage_capacity,
-                financial_notes, risk_flags
-            }
         """
         await self.emit_start("Reading club financial plan and calculating salary thresholds...")
 
         plan = self._load_financial_plan()
-        await self.emit_progress("Financial plan loaded", {"team": plan["team"]["name"]})
+        await self.emit_progress(f"Financial plan loaded for {plan.get('team', {}).get('name', 'Unknown')}")
 
-        # Build prompt with full financial context
         plan_json = json.dumps(plan, indent=2)
 
-        result = await self.chat_json(
-            messages=[
-                {
-                    "role": "user",
-                    "content": (
-                        PromptLoader.get("financial_analyze").format(
-                            query=query,
-                            position=position or 'to be determined from query',
-                            plan_json=plan_json
-                        )
-                    ),
-                }
-            ]
+        task_prompt = PromptLoader.get("financial_analyze").format(
+            query=query,
+            position=position or 'to be determined from query',
+            plan_json=plan_json
         )
+        task_prompt += "\n\nCRITICAL: You must output ONLY valid JSON format in your final response containing the salary parameters. Do not include markdown codeblocks or other text in your final message."
+
+        response_text = await self._run_deep_agent(task_prompt)
+        
+        # Clean the response to ensure it's valid JSON
+        cleaned_text = response_text.replace("```json", "").replace("```", "").strip()
+        try:
+            result = json.loads(cleaned_text)
+        except json.JSONDecodeError:
+            await self.emit_error("Failed to parse JSON from financial agent.", cleaned_text)
+            raise
 
         await self.emit_complete(
-            f"Financial analysis complete — salary range: €{result.get('salary_min', 0):,} – €{result.get('salary_max', 0):,}/week",
-            result,
+            f"Financial analysis complete — salary range: €{result.get('salary_min', 0):,} – €{result.get('salary_max', 0):,}/week"
         )
         return result

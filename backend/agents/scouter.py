@@ -80,14 +80,7 @@ class ScouterAgent(BaseAgent):
         **kwargs,
     ) -> dict[str, Any]:
         """
-        Scout players from the database using MCP tools.
-
-        Args:
-            query:              Original scouting query.
-            financial_decision: Output from FinancialAgent (salary thresholds).
-
-        Returns:
-            {"players": [list of 3–5 player dicts with scout_note added]}
+        Scout players from the database using MCP tools via Deep Agent.
         """
         await self.emit_start("Connecting to player database via MCP server...")
 
@@ -95,78 +88,62 @@ class ScouterAgent(BaseAgent):
         salary_min = financial_decision.get("salary_min", 0)
         value_max = financial_decision.get("value_max", 100_000_000)
 
-        # Step 1 — Let the LLM parse the query and decide search parameters
-        await self.emit_progress("Parsing scouting query to extract search filters...")
+        from langchain_core.tools import tool
 
-        search_params_raw = await self.chat_json(
-            messages=[
-                {
-                    "role": "user",
-                    "content": (
-                        PromptLoader.get("scouter_search_params").format(
-                            query=query,
-                            salary_min=salary_min,
-                            salary_max=salary_max,
-                            value_max=value_max,
-                        )
-                    ),
-                }
-            ]
+        @tool
+        async def query_player_database(
+            min_wage: int = 0,
+            max_wage: int = 100000,
+            position: str = None,
+            min_rating: int = None,
+            max_value: int = None,
+            limit: int = 15,
+        ) -> list[dict]:
+            """
+            Search the postgres player database. 
+            Returns a list of player dicts matching the criteria.
+            If no results are found, you should call this again with relaxed constraints (e.g. higher max_wage, lower min_rating).
+            """
+            params = {
+                "min_wage": min_wage,
+                "max_wage": max_wage,
+                "limit": limit
+            }
+            if position: params["position"] = position
+            if min_rating: params["min_rating"] = min_rating
+            if max_value: params["max_value"] = max_value
+            
+            try:
+                res = await self._call_mcp_tool("search_players", params)
+                return res or []
+            except Exception as e:
+                return [{"error": str(e)}]
+
+        task_prompt = (
+            f"Original user query: {query}\n\n"
+            f"Financial constraints to enforce:\n"
+            f"- Min Wage: {salary_min}\n"
+            f"- Max Wage: {salary_max}\n"
+            f"- Max Value: {value_max}\n\n"
+            f"Use the `query_player_database` tool to search for candidates. "
+            f"If the tool returns empty, try again with slightly relaxed constraints (e.g. increase max_wage by 15%, drop rating). "
+            f"Pick up to 5 candidates from the results. If you cannot find 5 candidates after a few tries, just return the ones you found. For each candidate, append a 'scout_note' field to their data dictionary with a brief justification of why they fit. "
+            f"CRITICAL: Your final response MUST be ONLY valid JSON containing the final list of players in this exact format:\n"
+            f'{{"players": [ {{ "id": 1, "name": "...", "scout_note": "..." }} ]}}\n'
+            f"Do not output markdown codeblocks, just the raw JSON."
         )
 
-        search_params = {
-            "max_wage": salary_max,
-            "min_wage": salary_min,
-            "limit": 15,
-            **{k: v for k, v in search_params_raw.items() if v is not None},
-        }
-
-        # Step 2 — Query via MCP
-        await self.emit_progress(f"Querying database with filters: {search_params}")
+        response_text = await self._run_deep_agent(task_prompt, tools=[query_player_database])
+        
+        cleaned_text = response_text.replace("```json", "").replace("```", "").strip()
         try:
-            raw_players: list[dict] = await self._call_mcp_tool("search_players", search_params)
-        except Exception as exc:
-            await self.emit_error("MCP query failed", str(exc))
+            result = json.loads(cleaned_text)
+            players = result.get("players", [])
+        except json.JSONDecodeError:
+            await self.emit_error("Failed to parse JSON from scouter agent.", cleaned_text)
             raise
 
-        if not raw_players:
-            # Fallback: relax salary by 15% and remove rating filter
-            await self.emit_progress("No results found — relaxing filters and retrying...")
-            search_params["max_wage"] = int(salary_max * 1.15)
-            search_params.pop("min_rating", None)
-            raw_players = await self._call_mcp_tool("search_players", search_params) or []
-
-        # Step 3 — Pick top 5 from DB results (no LLM — avoids hallucination)
-        # The MCP server already orders by performance DESC, so just take the best.
-        shortlist = raw_players[:5]
-        await self.emit_progress(
-            f"Database returned {len(raw_players)} candidates — taking top {len(shortlist)}"
-        )
-
-        # Step 4 — LLM writes scout_note ONLY; player data is never modified
-        await self.emit_progress("Generating scouting notes for each player...")
-        players = []
-        for player in shortlist:
-            note_result = await self.chat_json(
-                messages=[
-                    {
-                        "role": "user",
-                        "content": (
-                            PromptLoader.get("scouter_note").format(
-                                query=query,
-                                player_json=json.dumps(player, indent=2)
-                            )
-                        ),
-                    }
-                ]
-            )
-            # Keep the original DB record untouched; only append the note
-            enriched = dict(player)
-            enriched["scout_note"] = note_result.get("scout_note", "No note generated.")
-            players.append(enriched)
-
         await self.emit_complete(
-            f"Shortlisted {len(players)} verified players from database",
-            {"count": len(players), "names": [p.get("name") for p in players]},
+            f"Shortlisted {len(players)} verified players from database"
         )
         return {"players": players}

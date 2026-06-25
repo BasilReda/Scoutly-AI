@@ -102,3 +102,13 @@ def make_azure_client():
             pass
 
     return client
+
+def get_langchain_azure_llm():
+    from langchain_openai import AzureChatOpenAI
+    return AzureChatOpenAI(
+        azure_endpoint=settings.AZURE_OPENAI_ENDPOINT,
+        azure_deployment=settings.AZURE_OPENAI_DEPLOYMENT_NAME,
+        api_key=settings.AZURE_OPENAI_API_KEY,
+        api_version=settings.AZURE_OPENAI_API_VERSION,
+        temperature=0,
+    )

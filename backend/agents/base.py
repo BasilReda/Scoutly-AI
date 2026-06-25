@@ -6,9 +6,10 @@ from abc import ABC, abstractmethod
 from typing import Any, AsyncGenerator
 
 from openai import AsyncAzureOpenAI
+from deepagents import create_deep_agent
 
 from ..utils.prompt_loader import PromptLoader
-from ..utils.config import settings
+from ..utils.config import settings, get_langchain_azure_llm
 
 
 class BaseAgent(ABC):
@@ -73,50 +74,75 @@ class BaseAgent(ABC):
     # LLM Helpers
     # ─────────────────────────────────────────────────────────────────────────
 
-    async def chat(
-        self,
-        messages: list[dict],
-        tools: list[dict] | None = None,
-        response_format: dict | None = None,
-        temperature: float = 0.3,
-    ) -> Any:
+    async def _run_deep_agent(self, task_message: str, tools: list | None = None) -> str:
         """
-        Call OpenAI chat completions with the agent's system prompt.
-        Returns the raw ChatCompletion response.
+        Run a deep agent loop with streaming SSE emission.
+        Returns the final string output of the agent.
         """
-        full_messages = [
-            {"role": "system", "content": self.system_prompt},
-            *messages,
-        ]
-        kwargs: dict[str, Any] = {
-            "model": settings.OPENAI_MODEL,
-            "messages": full_messages,
-            "temperature": temperature,
-        }
-        if tools:
-            kwargs["tools"] = tools
-            kwargs["tool_choice"] = "auto"
-        if response_format:
-            kwargs["response_format"] = response_format
-
-        return await self.client.chat.completions.create(**kwargs)
-
-    async def chat_json(
-        self,
-        messages: list[dict],
-        temperature: float = 0.2,
-    ) -> dict:
-        """
-        Call OpenAI and parse the response as JSON.
-        Uses response_format=json_object for reliability.
-        """
-        response = await self.chat(
-            messages=messages,
-            response_format={"type": "json_object"},
-            temperature=temperature,
+        llm = get_langchain_azure_llm()
+        agent = create_deep_agent(
+            model=llm,
+            tools=tools or [],
+            instructions=self.system_prompt,
         )
-        content = response.choices[0].message.content
-        return json.loads(content)
+
+        await self.emit_progress(f"[{self.AGENT_NAME}] Deep agent starting...")
+        
+        final_report = ""
+        
+        try:
+            async for event in agent.astream({"messages": task_message}, stream_mode="updates"):
+                if not isinstance(event, dict):
+                    continue
+                for node, state in event.items():
+                    if not isinstance(state, dict):
+                        continue
+                    for msg in (state.get("messages") or []):
+                        if msg is None:
+                            continue
+                        kind = type(msg).__name__
+                        content = getattr(msg, "content", "") or ""
+                        tool_calls = getattr(msg, "tool_calls", []) or []
+
+                        if tool_calls:
+                            for tc in tool_calls:
+                                if not isinstance(tc, dict):
+                                    continue
+                                name = tc.get("name", "")
+                                args = tc.get("args", {})
+                                formatted_args = ", ".join(f"{k}={v}" for k, v in args.items())
+                                await self.emit_progress(f"[{self.AGENT_NAME}] Calling tool: {name}({formatted_args})")
+                        elif kind == "ToolMessage":
+                            tool_name = getattr(msg, "name", "tool")
+                            content_str = str(content)
+                            try:
+                                parsed = json.loads(content_str)
+                                if isinstance(parsed, list):
+                                    preview = f"Returned {len(parsed)} items."
+                                    if parsed and isinstance(parsed[0], dict) and "name" in parsed[0]:
+                                        names = [p.get('name', 'Unknown') for p in parsed[:3]]
+                                        preview += f" Top: {', '.join(names)}"
+                                elif isinstance(parsed, dict):
+                                    if "players" in parsed:
+                                        preview = f"Returned {len(parsed['players'])} players."
+                                    elif "ranked_players" in parsed:
+                                        preview = f"Ranked {len(parsed['ranked_players'])} players."
+                                    else:
+                                        preview = f"Returned keys: {', '.join(parsed.keys())}"
+                                else:
+                                    preview = str(parsed)[:100]
+                            except Exception:
+                                preview = content_str[:100] + "..." if len(content_str) > 100 else content_str
+                            await self.emit_progress(f"[{self.AGENT_NAME}] Tool result [{tool_name}]: {preview}")
+                        elif kind == "AIMessage" and content and isinstance(content, str):
+                            if len(content) > 50:
+                                final_report = content
+                                await self.emit_progress(f"[{self.AGENT_NAME}] Reasoning: {content[:150]}...")
+        except Exception as exc:
+            await self.emit_error(f"[{self.AGENT_NAME}] Deep agent error", str(exc))
+            raise
+
+        return final_report
 
     # ─────────────────────────────────────────────────────────────────────────
     # Abstract Interface

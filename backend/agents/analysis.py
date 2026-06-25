@@ -251,18 +251,34 @@ class AnalysisAgent:
                                     continue
                                 name = tc.get("name", "")
                                 args = tc.get("args", {})
-                                await self.emit_progress(
-                                    f"Calling: {name}",
-                                    {"args_preview": str(args)[:200]},
-                                )
+                                formatted_args = ", ".join(f"{k}={v}" for k, v in args.items())
+                                await self.emit_progress(f"Calling: {name}({formatted_args})")
                         elif kind == "ToolMessage":
                             tool_name = getattr(msg, "name", "tool")
-                            preview = str(content)[:300]
-                            await self.emit_progress(f"Tool result [{tool_name}]", {"result": preview})
+                            content_str = str(content)
+                            try:
+                                parsed = json.loads(content_str)
+                                if isinstance(parsed, list):
+                                    preview = f"Returned {len(parsed)} items."
+                                    if parsed and isinstance(parsed[0], dict) and "name" in parsed[0]:
+                                        names = [p.get('name', 'Unknown') for p in parsed[:3]]
+                                        preview += f" Top: {', '.join(names)}"
+                                elif isinstance(parsed, dict):
+                                    if "players" in parsed:
+                                        preview = f"Returned {len(parsed['players'])} players."
+                                    elif "ranked_players" in parsed:
+                                        preview = f"Ranked {len(parsed['ranked_players'])} players."
+                                    else:
+                                        preview = f"Returned keys: {', '.join(parsed.keys())}"
+                                else:
+                                    preview = str(parsed)[:100]
+                            except Exception:
+                                preview = content_str[:100] + "..." if len(content_str) > 100 else content_str
+                            await self.emit_progress(f"Tool result [{tool_name}]: {preview}")
                         elif kind == "AIMessage" and content and isinstance(content, str):
                             if len(content) > 100:
                                 report = content
-                                await self.emit_progress("Agent reasoning...", {"preview": content[:200]})
+                                await self.emit_progress(f"Agent reasoning: {content[:150]}...")
 
         except Exception as exc:
             await self.emit_error("Deep agent error", str(exc))
@@ -277,8 +293,7 @@ class AnalysisAgent:
             ]
 
         await self.emit_complete(
-            f"Analysis complete — {len(all_charts)} charts generated",
-            {"chart_count": len(all_charts)},
+            f"Analysis complete — {len(all_charts)} charts generated"
         )
 
         return {

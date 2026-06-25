@@ -85,31 +85,29 @@ class TacticalAgent(BaseAgent):
         await self.emit_start("Loading team tactical document...")
 
         tactics_text = self._get_tactics()
-        await self.emit_progress(
-            "Tactical document loaded",
-            {"preview": tactics_text[:200] + "..."},
-        )
+        await self.emit_progress(f"Tactical document loaded. Preview: {tactics_text[:100]}...")
 
         await self.emit_progress(
             f"Evaluating {len(players)} candidates against team tactics and ranking..."
         )
 
-        result = await self.chat_json(
-            messages=[
-                {
-                    "role": "user",
-                    "content": (
-                        PromptLoader.get("tactical_evaluate").format(
-                            player_count=len(players),
-                            tactics_text=tactics_text,
-                            analysis_report=analysis_report[:3000],
-                            players_json=json.dumps(players, indent=2),
-                            financial_json=json.dumps(financial_decision, indent=2)
-                        )
-                    ),
-                }
-            ]
+        task_prompt = PromptLoader.get("tactical_evaluate").format(
+            player_count=len(players),
+            tactics_text=tactics_text,
+            analysis_report=analysis_report[:3000],
+            players_json=json.dumps(players, indent=2),
+            financial_json=json.dumps(financial_decision, indent=2)
         )
+        task_prompt += "\n\nCRITICAL: You must output ONLY valid JSON format in your final response containing the ranked players and tactical summary. Do not include markdown codeblocks or other text in your final message."
+
+        response_text = await self._run_deep_agent(task_prompt)
+        
+        cleaned_text = response_text.replace("```json", "").replace("```", "").strip()
+        try:
+            result = json.loads(cleaned_text)
+        except json.JSONDecodeError:
+            await self.emit_error("Failed to parse JSON from tactical agent.", cleaned_text)
+            raise
 
         ranked = result.get("ranked_players", [])
         summary = result.get("tactical_summary", "")
@@ -136,14 +134,6 @@ class TacticalAgent(BaseAgent):
                 ranked_player.update(name_to_player[name])
 
         await self.emit_complete(
-            f"Tactical ranking complete — #{1} pick: {ranked[0]['name'] if ranked else 'N/A'}",
-            {
-                "top_pick": ranked[0].get("name") if ranked else None,
-                "scores": [
-                    {"name": p.get("name"), "score": p.get("tactical_fit_score")}
-                    for p in ranked
-                ],
-            },
+            f"Tactical ranking complete — #{1} pick: {ranked[0]['name'] if ranked else 'N/A'}"
         )
-
         return {"ranked_players": ranked, "tactical_summary": summary}
