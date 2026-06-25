@@ -1,6 +1,16 @@
-# ⚽ Football AI Management System
+# ⚽ Scoutly AI - Football Management System
 
-A **multi-agent AI platform** for professional football club scouting, player analysis, and recruitment decisions — powered by GPT-4o, PostgreSQL, FastMCP, and WeasyPrint.
+## Project Overview & The Problem It Solves
+
+Modern football clubs generate massive amounts of data—from financial constraints and wage structures to detailed player performance metrics and complex tactical systems. Traditionally, a Head Scout or Sporting Director must manually consult different departments (Finance, Data Analytics, Tactics/Coaching) to identify transfer targets that fit the club's budget, playstyle, and statistical benchmarks.
+
+**Scoutly AI** solves this problem by providing a **multi-agent AI platform** powered by LangGraph, GPT-5/GPT-4o, PostgreSQL, FastMCP, and WeasyPrint. It orchestrates a team of specialized AI agents that act as your virtual front office. When you ask a simple natural language query (e.g., *"Find me a box-to-box midfielder with high stamina and good passing"*), the system automatically:
+
+1. **Checks Finances:** Determines your exact budget, salary caps, and negotiation margins.
+2. **Scouts the Market:** Queries the club's PostgreSQL player database dynamically.
+3. **Analyzes Data:** Generates custom statistical visualizations (radars, scatter plots, trend lines).
+4. **Evaluates Tactics:** Ranks players against the manager's tactical PDF playbook.
+5. **Generates Reports:** Assembles a beautiful, management-ready PDF briefing with high-confidence recommendations.
 
 ---
 
@@ -11,12 +21,12 @@ User (natural language query)
          │ SSE stream
          ▼
 ┌─────────────────────────┐
-│    FastAPI Backend       │  Port 8000
-│    (SSE + REST API)      │
+│    FastAPI Backend      │  Port 8000
+│    (SSE + REST API)     │
 └──────────┬──────────────┘
            │
 ┌──────────▼──────────────────────────────────────────────┐
-│                   Planner Agent                          │
+│                   Planner Agent                         │
 │  loads prompts/planner.md + agent manifest at runtime   │
 └──┬──────────┬──────────────┬───────────────┬────────────┘
    │          │              │               │
@@ -33,122 +43,38 @@ Agent      Agent         Agent           Agent
 ```
 
 ### MD-as-System-Prompt
-Every agent loads its own system prompt from a `.md` file at runtime:
-
-| File | Agent |
-|---|---|
-| `prompts/planner.md` | Planner — reads all other agent .md files to build a dynamic manifest |
-| `prompts/financial.md` | Financial Agent |
-| `prompts/scouter.md` | Scouter Agent |
-| `prompts/analysis.md` | Analysis Agent |
-| `prompts/tactical.md` | Tactical Agent |
-| `prompts/pdf_report.md` | PDF Narrative Agent |
-
-Modify any `.md` file and it takes effect on the **next pipeline run** — no restart needed.
+Every agent loads its own system prompt from a `.md` file at runtime. Modify any `.md` file in the `prompts/` directory and it takes effect on the **next pipeline run** — no restart needed.
 
 ---
 
-## Quick Start
+## Quick Start (Podman)
+
+We use **Podman** for a fast, containerized start. All services (PostgreSQL, MCP Server, FastAPI Backend) are orchestrated seamlessly using a single PowerShell script.
 
 ### 1. Clone & Configure
 
 ```bash
-git clone <repo-url>
-cd football-ai
+git clone https://github.com/BasilReda/Scoutly-AI.git
+cd Scoutly-AI
 
-# Copy env template and fill in your OpenAI API key
+# Copy env template and fill in your Azure/OpenAI details
 cp .env.example .env
-# Edit .env and set OPENAI_API_KEY=sk-...
+# Edit .env and set your API keys
 ```
 
-### 2. Start PostgreSQL (Podman)
+### 2. Start Services
 
-```bash
-podman run -d \
-  --name football-postgres \
-  -e POSTGRES_USER=football_user \
-  -e POSTGRES_PASSWORD=football_pass \
-  -e POSTGRES_DB=football_db \
-  -p 5432:5432 \
-  postgres:16-alpine
+Run the provided PowerShell script to build the images, create the network, start PostgreSQL, seed the mock data, and launch the backend and MCP servers.
 
-# Seed the player database (wait ~5s for postgres to start)
-sleep 5
-podman exec -i football-postgres psql -U football_user football_db < data/players_seed.sql
+```powershell
+.\start_podman.ps1
 ```
 
-### 3. Generate the Tactics PDF (first time only)
+*This script completely automates the setup. The API will be available at `http://localhost:8000` and the MCP server at `http://localhost:8001`.*
 
-```bash
-pip install reportlab   # just for this one-time script
-python data/generate_tactics_pdf.py
-```
+### 3. Open the UI
 
-### 4. Install Python Dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-### 5. Start the MCP Server
-
-```bash
-# Terminal 1
-python -m backend.mcp_server.server
-# Runs on http://localhost:8001
-```
-
-### 6. Start the FastAPI Backend
-
-```bash
-# Terminal 2
-python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-### 7. Open the UI
-
-Navigate to **http://localhost:8000**
-
----
-
-## Using Podman (Individual Containers)
-
-```bash
-# Build backend image
-podman build -f Containerfile.backend -t football-ai-backend .
-
-# Build MCP server image
-podman build -f Containerfile.mcp -t football-ai-mcp .
-
-# Run PostgreSQL
-podman run -d --name football-postgres \
-  -e POSTGRES_USER=football_user \
-  -e POSTGRES_PASSWORD=football_pass \
-  -e POSTGRES_DB=football_db \
-  -p 5432:5432 postgres:16-alpine
-
-# Seed database
-sleep 5
-podman exec -i football-postgres psql -U football_user football_db < data/players_seed.sql
-
-# Run MCP server (link to postgres)
-podman run -d --name football-mcp \
-  --add-host host.containers.internal:host-gateway \
-  -e DATABASE_URL=postgresql://football_user:football_pass@host.containers.internal:5432/football_db \
-  -e MCP_SERVER_PORT=8001 \
-  -p 8001:8001 football-ai-mcp
-
-# Run FastAPI backend
-podman run -d --name football-api \
-  --add-host host.containers.internal:host-gateway \
-  -e OPENAI_API_KEY=sk-... \
-  -e DATABASE_URL=postgresql://football_user:football_pass@host.containers.internal:5432/football_db \
-  -e MCP_SERVER_HOST=host.containers.internal \
-  -v $(pwd)/charts:/app/charts \
-  -v $(pwd)/reports:/app/reports \
-  -v $(pwd)/data:/app/data \
-  -p 8000:8000 football-ai-backend
-```
+Navigate your browser to **http://localhost:8000** to access the premium dark-mode interface and start scouting!
 
 ---
 
@@ -169,54 +95,6 @@ podman run -d --name football-api \
 {
   "query": "Find me a striker under €70K/week who scores 15+ goals and fits a high-press system"
 }
-```
-
----
-
-## Project Structure
-
-```
-├── backend/
-│   ├── main.py                    # FastAPI app + SSE endpoint
-│   ├── agents/
-│   │   ├── base.py                # BaseAgent (MD prompt loader + SSE emission)
-│   │   ├── planner.py             # Orchestrator (GPT-4o function calling loop)
-│   │   ├── financial.py           # Financial analysis
-│   │   ├── scouter.py             # MCP-backed DB queries
-│   │   ├── analysis.py            # Stats + chart generation
-│   │   └── tactical.py            # Tactical fit ranking
-│   ├── mcp_server/
-│   │   └── server.py              # FastMCP PostgreSQL server
-│   ├── sandbox/
-│   │   └── executor.py            # Python code sandbox runner
-│   ├── pdf/
-│   │   ├── generator.py           # WeasyPrint PDF generator
-│   │   └── templates/report.html  # Jinja2 HTML template
-│   └── utils/
-│       ├── config.py              # Settings from .env
-│       └── prompt_loader.py       # MD prompt file loader
-├── prompts/                       # Agent system prompts as .md files
-│   ├── planner.md
-│   ├── financial.md
-│   ├── scouter.md
-│   ├── analysis.md
-│   ├── tactical.md
-│   └── pdf_report.md
-├── frontend/
-│   ├── index.html                 # Premium dark UI
-│   ├── style.css
-│   └── app.js                     # SSE client + pipeline r
-├── data/
-│   ├── financial_plan.yaml        # Club financial constraints
-│   ├── tactics.pdf                # Team tactical document (generated)
-│   ├── generate_tactics_pdf.py    # One-time tactics PDF generator
-│   └── players_seed.sql           # 55 mock players in PostgreSQL
-├── charts/                        # Runtime chart PNGs (gitignored)
-├── reports/                       # Runtime PDF reports (gitignored)
-├── Containerfile.backend          # Podman backend container
-├── Containerfile.mcp              # Podman MCP server container
-├── requirements.txt
-└── .env.example
 ```
 
 ---
@@ -252,7 +130,7 @@ Edit any file in `prompts/` — no restart needed. The agents reload prompts on 
 Edit `data/financial_plan.yaml` — update budget, salary caps, or performance rules.
 
 ### Change Team Tactics
-Replace `data/tactics.pdf` with your club's actual tactical document (PDF, max ~20 pages).
+Replace `data/tactics.pdf` with your club's actual tactical document.
 
 ### Add More Players
-Add rows to `data/players_seed.sql` and re-run the seed script.
+Add rows to `data/players_seed.sql` and re-run the `.\start_podman.ps1` script to re-seed the PostgreSQL database.
