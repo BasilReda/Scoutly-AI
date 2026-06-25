@@ -16,3 +16,12 @@ services:
         sync: false
       - key: AZURE_OPENAI_DEPLOYMENT_NAME
         sync: false
+      # LangSmith Tracing
+      - key: LANGCHAIN_TRACING_V2
+        value: "true"
+      - key: LANGCHAIN_ENDPOINT
+        value: "https://api.smith.langchain.com"
+      - key: LANGCHAIN_PROJECT
+        sync: false
+      - key: LANGCHAIN_API_KEY
+        sync: false
