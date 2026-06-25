@@ -4,10 +4,10 @@
 
 Modern football clubs generate massive amounts of data—from financial constraints and wage structures to detailed player performance metrics and complex tactical systems. Traditionally, a Head Scout or Sporting Director must manually consult different departments (Finance, Data Analytics, Tactics/Coaching) to identify transfer targets that fit the club's budget, playstyle, and statistical benchmarks.
 
-**Scoutly AI** solves this problem by providing a **multi-agent AI platform** powered by LangGraph, GPT-5/GPT-4o, PostgreSQL, FastMCP, and WeasyPrint. It orchestrates a team of specialized AI agents that act as your virtual front office. When you ask a simple natural language query (e.g., *"Find me a box-to-box midfielder with high stamina and good passing"*), the system automatically:
+**Scoutly AI** solves this problem by providing a **multi-agent AI platform** powered by LangGraph, GPT-5/GPT-4o, SQLite, FastMCP, and WeasyPrint. It orchestrates a team of specialized AI agents that act as your virtual front office. When you ask a simple natural language query (e.g., *"Find me a box-to-box midfielder with high stamina and good passing"*), the system automatically:
 
 1. **Checks Finances:** Determines your exact budget, salary caps, and negotiation margins.
-2. **Scouts the Market:** Queries the club's PostgreSQL player database dynamically.
+2. **Scouts the Market:** Queries the club's SQLite player database dynamically.
 3. **Analyzes Data:** Generates custom statistical visualizations (radars, scatter plots, trend lines).
 4. **Evaluates Tactics:** Ranks players against the manager's tactical PDF playbook.
 5. **Generates Reports:** Assembles a beautiful, management-ready PDF briefing with high-confidence recommendations.
@@ -37,8 +37,8 @@ Agent      Agent         Agent           Agent
         MCP Server    Python Sandbox
         (Port 8001)   (matplotlib charts)
            │
-       PostgreSQL
-       (Port 5432)
+       SQLite DB
+       (football.db)
                               └──→ WeasyPrint PDF
 ```
 
@@ -64,7 +64,7 @@ cp .env.example .env
 
 ### 2. Start Services
 
-Run the provided PowerShell script to build the images, create the network, start PostgreSQL, seed the mock data, and launch the backend and MCP servers.
+Run the provided PowerShell script to build the images, create the network, and launch the backend and MCP servers (which automatically connects to the SQLite database).
 
 ```powershell
 .\start_podman.ps1
@@ -133,4 +133,4 @@ Edit `data/financial_plan.yaml` — update budget, salary caps, or performance r
 Replace `data/tactics.pdf` with your club's actual tactical document.
 
 ### Add More Players
-Add rows to `data/players_seed.sql` and re-run the `.\start_podman.ps1` script to re-seed the PostgreSQL database.
+Add rows to `data/players_seed.sql` and rebuild the database to re-seed the SQLite instance.
