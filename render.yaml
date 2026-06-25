@@ -8,8 +8,6 @@ services:
     # This script runs both the MCP server and the FastAPI backend together
     dockerCommand: "bash ./start_render.sh"
     envVars:
-      - key: OPENAI_API_KEY
-        sync: false
       - key: AZURE_OPENAI_API_KEY
         sync: false
       - key: AZURE_OPENAI_ENDPOINT
