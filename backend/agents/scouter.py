@@ -119,20 +119,12 @@ class ScouterAgent(BaseAgent):
             except Exception as e:
                 return [{"error": str(e)}]
 
-        task_prompt = (
-            f"Original user query: {query}\n\n"
-            f"Financial constraints to enforce:\n"
-            f"- Min Wage: {salary_min}\n"
-            f"- Max Wage: {salary_max}\n"
-            f"- Max Value: {value_max}\n\n"
-            f"Use the `query_player_database` tool to search for candidates. "
-            f"If the tool returns empty, try again with slightly relaxed constraints (e.g. increase max_wage by 15%, drop rating). "
-            f"CRITICAL ANTI-LOOPING RULE: The tool CANNOT filter by age, preferred foot, or specific playstyles. If the tool returns candidates, YOU MUST select the closest matches from them. Do NOT call the tool over and over if it returns the same players. Call the tool at most 2-3 times. "
-            f"CRITICAL: NEVER hallucinate or invent players! You MUST ONLY return players that were actually returned by the `query_player_database` tool. If the tool returns empty or no players fit at all, YOU MUST RETURN AN EMPTY LIST.\n"
-            f"Pick up to 5 candidates from the results. If you cannot find a perfect match, just return the closest ones you found. For each candidate, append a 'scout_note' field to their data dictionary with a brief justification of why they fit. "
-            f"CRITICAL: Your final response MUST be ONLY valid JSON containing the final list of players in this exact format:\n"
-            f'{{"players": [ {{ "id": 1, "name": "...", "scout_note": "..." }} ]}}\n'
-            f"Do not output markdown codeblocks, just the raw JSON."
+        task_template = PromptLoader.load("prompts/scouter_task.md")
+        task_prompt = task_template.format(
+            query=query,
+            salary_min=salary_min,
+            salary_max=salary_max,
+            value_max=value_max
         )
 
         response_text = await self._run_deep_agent(task_prompt, tools=[query_player_database])
