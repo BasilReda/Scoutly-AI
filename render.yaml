@@ -1,0 +1,42 @@
+services:
+  # The FastMCP Database Server (Private Service)
+  # This runs securely behind the scenes and connects to the SQLite DB
+  - type: pserv
+    name: scoutly-mcp
+    env: docker
+    dockerfilePath: ./Containerfile.mcp
+    # Expose the internal port for the backend to connect to
+    dockerCommand: "python -m backend.mcp_server.server"
+    envVars:
+      - key: PORT
+        value: "8001"
+
+  # The FastAPI Backend (Public Web Service)
+  - type: web
+    name: scoutly-backend
+    env: docker
+    dockerfilePath: ./Containerfile.backend
+    # Mount persistent storage for reports and databases if needed (optional)
+    disk:
+      name: scoutly-data
+      mountPath: /app/data
+      sizeGB: 1
+    envVars:
+      - key: PORT
+        value: "8000"
+      - key: MCP_SERVER_HOST
+        # Connects internally to the pserv name
+        value: scoutly-mcp
+      - key: MCP_SERVER_PORT
+        value: "8001"
+      - key: OPENAI_API_KEY
+        # You will be prompted to enter this in Render
+        sync: false
+      - key: AZURE_OPENAI_API_KEY
+        sync: false
+      - key: AZURE_OPENAI_ENDPOINT
+        sync: false
+      - key: AZURE_OPENAI_API_VERSION
+        sync: false
+      - key: AZURE_OPENAI_DEPLOYMENT_NAME
+        sync: false
