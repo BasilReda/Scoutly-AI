@@ -201,7 +201,6 @@ async def verify_player_on_fbref(player_name: str) -> str:
         JSON with keys: exists (bool), matched_name (str | null).
     """
     import httpx
-    from bs4 import BeautifulSoup
 
     url = "https://fbref.com/search/search.fcgi"
     headers = {"User-Agent": "Mozilla/5.0 (compatible; ScoutBot/1.0)"}
@@ -211,16 +210,15 @@ async def verify_player_on_fbref(player_name: str) -> str:
         async with httpx.AsyncClient(follow_redirects=True, timeout=10) as client:
             r = await client.get(url, headers=headers, params=params)
 
-        # FBref redirects directly to the player page on an exact match
+        # FBref redirects directly to a player page on an exact match
         if "/players/" in str(r.url):
             return json.dumps({"exists": True, "matched_name": player_name})
 
-        # Parse search results page for a close name match
-        soup = BeautifulSoup(r.text, "html.parser")
-        for item in soup.select("div.search-item-name"):
-            text = item.get_text(strip=True)
-            if player_name.lower() in text.lower():
-                return json.dumps({"exists": True, "matched_name": text})
+        # Check if the player name appears in the search results HTML
+        html_lower = r.text.lower()
+        name_lower = player_name.lower()
+        if name_lower in html_lower:
+            return json.dumps({"exists": True, "matched_name": player_name})
 
         return json.dumps({"exists": False, "matched_name": None})
 
