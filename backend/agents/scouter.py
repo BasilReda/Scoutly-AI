@@ -128,14 +128,22 @@ class ScouterAgent(BaseAgent):
         )
 
         response_text = await self._run_deep_agent(task_prompt, tools=[query_player_database])
-        
-        cleaned_text = response_text.replace("```json", "").replace("```", "").strip()
-        try:
-            result = json.loads(cleaned_text)
-            players = result.get("players", [])
-        except json.JSONDecodeError:
-            await self.emit_error("Failed to parse JSON from scouter agent.", cleaned_text)
-            raise
+
+        cleaned = response_text.replace("```json", "").replace("```", "").strip()
+        result = None
+        start, end = cleaned.find("{"), cleaned.rfind("}")
+        for candidate in ([cleaned, cleaned[start:end + 1]] if start != -1 and end != -1 else [cleaned]):
+            try:
+                parsed = json.loads(candidate)
+                if isinstance(parsed, dict):
+                    result = parsed
+                    break
+            except json.JSONDecodeError:
+                continue
+        if result is None:
+            await self.emit_error("Failed to parse JSON from scouter agent.", cleaned[:300])
+            raise ValueError("No valid JSON found in scouter agent response")
+        players = result.get("players", [])
 
         await self.emit_complete(
             f"Shortlisted {len(players)} verified players from database"

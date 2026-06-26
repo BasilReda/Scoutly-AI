@@ -4,10 +4,11 @@ import json
 from typing import Any
 
 import yaml
+from langchain_core.messages import HumanMessage, SystemMessage
 from openai import AsyncOpenAI
 
 from .base import BaseAgent
-from ..utils.config import settings
+from ..utils.config import settings, get_langchain_azure_llm
 from ..utils.prompt_loader import PromptLoader
 
 
@@ -26,9 +27,6 @@ class FinancialAgent(BaseAgent):
         return self._plan_cache
 
     async def run(self, query: str, position: str | None = None, **kwargs) -> dict[str, Any]:
-        """
-        Analyze the club's financial plan and return salary thresholds for scouting.
-        """
         await self.emit_start("Reading club financial plan and calculating salary thresholds...")
 
         plan = self._load_financial_plan()
@@ -36,24 +34,46 @@ class FinancialAgent(BaseAgent):
 
         plan_json = json.dumps(plan, indent=2)
 
-        task_prompt = PromptLoader.get("financial_analyze").format(
-            query=query,
-            position=position or 'to be determined from query',
-            plan_json=plan_json
+        system_prompt = self.system_prompt or (
+            "You are a football club financial analyst. "
+            "Always respond with a single valid JSON object — no markdown, no explanation."
         )
-        task_prompt += "\n\nCRITICAL: You must output ONLY valid JSON format in your final response containing the salary parameters. Do not include markdown codeblocks or other text in your final message."
 
-        response_text = await self._run_deep_agent(task_prompt)
-        
-        # Clean the response to ensure it's valid JSON
-        cleaned_text = response_text.replace("```json", "").replace("```", "").strip()
+        user_prompt = PromptLoader.get("financial_analyze").format(
+            query=query,
+            position=position or "to be determined from query",
+            plan_json=plan_json,
+        )
+
+        await self.emit_progress("[financial] Analysing financial plan...")
+
+        # Use JSON mode to guarantee valid JSON output
+        llm = get_langchain_azure_llm().bind(response_format={"type": "json_object"})
+        response = await llm.ainvoke([
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=user_prompt),
+        ])
+        raw = response.content if hasattr(response, "content") else str(response)
+
         try:
-            result = json.loads(cleaned_text)
+            result = json.loads(raw)
         except json.JSONDecodeError:
-            await self.emit_error("Failed to parse JSON from financial agent.", cleaned_text)
-            raise
+            # Fallback: extract first {...} block
+            start, end = raw.find("{"), raw.rfind("}")
+            if start != -1 and end != -1:
+                try:
+                    result = json.loads(raw[start:end + 1])
+                except json.JSONDecodeError:
+                    result = None
+            else:
+                result = None
+
+        if not isinstance(result, dict):
+            await self.emit_error("Failed to parse JSON from financial agent.", raw[:300])
+            raise ValueError("No valid JSON found in financial agent response")
 
         await self.emit_complete(
-            f"Financial analysis complete — salary range: €{result.get('salary_min', 0):,} – €{result.get('salary_max', 0):,}/week"
+            f"Financial analysis complete — salary range: "
+            f"€{result.get('salary_min', 0):,} – €{result.get('salary_max', 0):,}/week"
         )
         return result

@@ -5,10 +5,11 @@ python-multipart==0.0.12
 aiofiles==24.1.0
 
 # ── LLM ────────────────────────────────────────────────────────────────────────
-openai==1.57.0
+openai
 langchain-openai
 langchain-core
-deepagents
+langgraph==1.2.6
+deepagents==0.6.11
 langsmith
 
 # ── MCP ────────────────────────────────────────────────────────────────────────

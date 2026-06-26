@@ -215,14 +215,16 @@ class AnalysisAgent:
         agent = create_deep_agent(
             model=llm,
             tools=[run_python_script, describe_image, list_files],
-            instructions=PromptLoader.get("analysis"),
+            system_prompt=PromptLoader.get("analysis"),
         )
 
+        extra_context = kwargs.get("extra_context", "")
+        extra_line = f"\n\nAdditional focus: {extra_context}" if extra_context else ""
         task = (
             f"Analyse these {len(players)} football candidates.\n\n"
             f"player_data = {json.dumps(players, indent=2)}\n\n"
             f"Save ALL charts to this exact directory: {chart_dir}\n\n"
-            "Follow the 5 steps in your instructions."
+            f"Follow the 5 steps in your instructions.{extra_line}"
         )
 
         await self.emit_progress("Deep agent running — generating charts and analysis...")

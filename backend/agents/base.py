@@ -83,7 +83,7 @@ class BaseAgent(ABC):
         agent = create_deep_agent(
             model=llm,
             tools=tools or [],
-            instructions=self.system_prompt,
+            system_prompt=self.system_prompt,
         )
 
         await self.emit_progress(f"[{self.AGENT_NAME}] Deep agent starting...")
@@ -134,10 +134,20 @@ class BaseAgent(ABC):
                             except Exception:
                                 preview = content_str[:100] + "..." if len(content_str) > 100 else content_str
                             await self.emit_progress(f"[{self.AGENT_NAME}] Tool result [{tool_name}]: {preview}")
-                        elif kind == "AIMessage" and content and isinstance(content, str):
-                            final_report = content
-                            if len(content) > 50:
-                                await self.emit_progress(f"[{self.AGENT_NAME}] Reasoning: {content[:150]}...")
+                        elif kind == "AIMessage" and not tool_calls:
+                            # content can be str or list[dict] depending on the model/version
+                            if isinstance(content, str) and content:
+                                final_report = content
+                            elif isinstance(content, list):
+                                parts = [
+                                    b.get("text", "") if isinstance(b, dict) else str(b)
+                                    for b in content
+                                ]
+                                text = "".join(parts).strip()
+                                if text:
+                                    final_report = text
+                            if final_report and len(final_report) > 50:
+                                await self.emit_progress(f"[{self.AGENT_NAME}] Reasoning: {final_report[:150]}...")
         except Exception as exc:
             await self.emit_error(f"[{self.AGENT_NAME}] Deep agent error", str(exc))
             raise

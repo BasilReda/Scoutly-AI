@@ -2,24 +2,27 @@
 FastAPI Backend — main application entry point.
 
 Endpoints:
-  GET  /                     → Serve frontend HTML
-  GET  /static/*             → Serve CSS/JS
-  POST /api/scout            → Start a scouting pipeline (SSE stream)
-  GET  /api/download/{run_id} → Download the generated PDF
-  GET  /api/health           → Health check
-  GET  /api/agents           → List available agents & their prompts
+  GET  /                               → Serve frontend HTML
+  GET  /static/*                       → Serve CSS/JS
+  POST /api/scout                      → Start a scouting pipeline (SSE stream)
+  POST /api/scout/{run_id}/decision    → HITL: proceed / stop / adjust with comment
+  POST /api/scout/{run_id}/select-player → User picks a player card
+  POST /api/scout/{run_id}/send-email  → User confirms email and sends
+  GET  /api/download/{run_id}          → Download the generated PDF
+  GET  /api/health                     → Health check
+  GET  /api/agents                     → List available agents & their prompts
 """
 import asyncio
 import json
 import uuid
 from pathlib import Path
 
-import aiofiles
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from openai import AsyncAzureOpenAI
+from pydantic import BaseModel
 
 from .agents.planner import PlannerAgent
 from .utils.config import settings, make_azure_client
@@ -39,15 +42,38 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Mount frontend static files
 _frontend_dir = Path(__file__).resolve().parent.parent / "frontend"
 if _frontend_dir.exists():
     app.mount("/static", StaticFiles(directory=str(_frontend_dir)), name="static")
 
 
-# ── OpenAI Client (shared) ────────────────────────────────────────────────────
 def get_openai_client() -> AsyncAzureOpenAI:
     return make_azure_client()
+
+
+# ── HITL Coordination State ───────────────────────────────────────────────────
+# Queue-based: avoids the asyncio.Event "already set" race condition.
+# Each queue item is {"action": "proceed"|"stop"|"adjust", "comment": str}
+run_hitl_queues: dict[str, asyncio.Queue] = {}
+
+# Player selection: queue item is the selected player name (str)
+run_player_selection_queues: dict[str, asyncio.Queue] = {}
+
+# Email confirmation: Event + body string (one-shot, no loop needed)
+run_email_events: dict[str, asyncio.Event] = {}
+run_email_bodies: dict[str, str] = {}
+
+
+# ── Request Models ────────────────────────────────────────────────────────────
+class DecisionRequest(BaseModel):
+    action: str   # "proceed" | "stop" | "adjust"
+    comment: str = ""
+
+class PlayerSelectionRequest(BaseModel):
+    player_name: str
+
+class SendEmailRequest(BaseModel):
+    email_body: str
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -71,16 +97,44 @@ async def health_check():
 
 @app.get("/api/agents")
 async def list_agents():
-    """Return all available agents and their system prompt summaries."""
     manifest = PromptLoader.manifest()
-    agents = []
-    for name, description in manifest.items():
-        agents.append({
-            "name": name,
-            "description": description,
-            "prompt_file": f"prompts/{name}.md",
-        })
-    return {"agents": agents}
+    return {"agents": [
+        {"name": n, "description": d, "prompt_file": f"prompts/{n}.md"}
+        for n, d in manifest.items()
+    ]}
+
+
+@app.post("/api/scout/{run_id}/decision")
+async def submit_decision(run_id: str, body: DecisionRequest):
+    """
+    HITL decision endpoint.
+    action = "proceed"  → continue pipeline to next agent
+    action = "stop"     → halt pipeline
+    action = "adjust"   → re-run current agent with comment as extra context
+    """
+    if run_id not in run_hitl_queues:
+        raise HTTPException(status_code=404, detail="Run not found or already completed.")
+    if body.action not in ("proceed", "stop", "adjust"):
+        raise HTTPException(status_code=400, detail="action must be 'proceed', 'stop', or 'adjust'.")
+    await run_hitl_queues[run_id].put({"action": body.action, "comment": body.comment or ""})
+    return {"status": "ok", "action": body.action}
+
+
+@app.post("/api/scout/{run_id}/select-player")
+async def select_player(run_id: str, body: PlayerSelectionRequest):
+    if run_id not in run_player_selection_queues:
+        raise HTTPException(status_code=404, detail="Run not found or player selection already received.")
+    await run_player_selection_queues[run_id].put(body.player_name)
+    return {"status": "ok", "player": body.player_name}
+
+
+@app.post("/api/scout/{run_id}/send-email")
+async def send_email_confirm(run_id: str, body: SendEmailRequest):
+    if run_id not in run_email_events:
+        raise HTTPException(status_code=404, detail="Run not found or email already sent.")
+    run_email_bodies[run_id] = body.email_body
+    run_email_events[run_id].set()
+    return {"status": "ok"}
 
 
 @app.post("/api/scout")
@@ -88,12 +142,10 @@ async def scout_players(request: Request):
     """
     Start a full agentic scouting pipeline.
     Streams real-time SSE events as agents run.
-
-    Body: {"query": "Find me a striker under £60K/week who scores 15+ goals"}
+    Body: {"query": "..."}
     """
     body = await request.json()
     query: str = body.get("query", "").strip()
-
     if not query:
         raise HTTPException(status_code=400, detail="Query cannot be empty.")
 
@@ -103,20 +155,32 @@ async def scout_players(request: Request):
     async def event_stream():
         queue: asyncio.Queue = asyncio.Queue()
 
-        # Emit initial connection event
+        # Register coordination state for this run
+        run_hitl_queues[run_id] = asyncio.Queue()
+        run_player_selection_queues[run_id] = asyncio.Queue()
+        run_email_events[run_id] = asyncio.Event()
+
         yield f"data: {json.dumps({'type': 'connected', 'run_id': run_id, 'query': query})}\n\n"
 
-        # Start the pipeline in a background task
         async def run_pipeline():
             try:
-                planner = PlannerAgent(client=client, sse_queue=queue, run_id=run_id)
+                planner = PlannerAgent(
+                    client=client,
+                    sse_queue=queue,
+                    run_id=run_id,
+                    hitl_queues=run_hitl_queues,
+                    player_selection_queues=run_player_selection_queues,
+                    email_events=run_email_events,
+                    email_bodies=run_email_bodies,
+                )
                 result = await planner.run(query=query)
-                await queue.put({
-                    "type": "pipeline_complete",
-                    "run_id": run_id,
-                    "pdf_filename": Path(result.get("pdf_path", "")).name,
-                    "ranked_count": len(result.get("ranked_players", [])),
-                })
+                if not result.get("stopped"):
+                    await queue.put({
+                        "type": "pipeline_complete",
+                        "run_id": run_id,
+                        "pdf_filename": Path(result.get("pdf_path", "")).name,
+                        "ranked_count": len(result.get("ranked_players", [])),
+                    })
             except Exception as exc:
                 await queue.put({
                     "type": "pipeline_error",
@@ -124,23 +188,28 @@ async def scout_players(request: Request):
                     "error": str(exc),
                 })
             finally:
-                await queue.put(None)  # Sentinel → close stream
+                await queue.put(None)
 
-        task = asyncio.create_task(run_pipeline())
+        asyncio.create_task(run_pipeline())
 
-        # Stream events from queue
-        while True:
-            try:
-                event = await asyncio.wait_for(queue.get(), timeout=300.0)
-            except asyncio.TimeoutError:
-                yield f"data: {json.dumps({'type': 'timeout', 'message': 'Pipeline timed out'})}\n\n"
-                break
+        try:
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=300.0)
+                except asyncio.TimeoutError:
+                    yield f"data: {json.dumps({'type': 'timeout', 'message': 'Pipeline timed out'})}\n\n"
+                    break
 
-            if event is None:
-                yield f"data: {json.dumps({'type': 'stream_end'})}\n\n"
-                break
+                if event is None:
+                    yield f"data: {json.dumps({'type': 'stream_end'})}\n\n"
+                    break
 
-            yield f"data: {json.dumps(event, default=str)}\n\n"
+                yield f"data: {json.dumps(event, default=str)}\n\n"
+        finally:
+            run_hitl_queues.pop(run_id, None)
+            run_player_selection_queues.pop(run_id, None)
+            run_email_events.pop(run_id, None)
+            run_email_bodies.pop(run_id, None)
 
     return StreamingResponse(
         event_stream(),
@@ -155,15 +224,11 @@ async def scout_players(request: Request):
 
 @app.get("/api/download/{run_id}")
 async def download_pdf(run_id: str):
-    """Download the generated PDF scouting report for a given run ID."""
-    # Sanitize run_id
     if not all(c in "0123456789abcdef-" for c in run_id):
         raise HTTPException(status_code=400, detail="Invalid run ID.")
-
     pdf_path = settings.REPORTS_DIR / f"{run_id}.pdf"
     if not pdf_path.exists():
         raise HTTPException(status_code=404, detail="Report not found. The pipeline may still be running.")
-
     return FileResponse(
         path=str(pdf_path),
         media_type="application/pdf",
@@ -173,7 +238,6 @@ async def download_pdf(run_id: str):
 
 @app.get("/api/prompt/{agent_name}")
 async def get_agent_prompt(agent_name: str):
-    """Return the raw system prompt for a given agent (for debugging/inspection)."""
     try:
         content = PromptLoader.get(agent_name, use_cache=False)
         return {"agent": agent_name, "prompt": content}
