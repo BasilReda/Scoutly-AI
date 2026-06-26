@@ -189,6 +189,45 @@ async def list_positions() -> str:
     return json.dumps([r["position"] for r in rows])
 
 
+@mcp.tool()
+async def verify_player_on_fbref(player_name: str) -> str:
+    """
+    Search FBref to check if a real footballer with this name exists.
+
+    Args:
+        player_name: The full name of the player to verify.
+
+    Returns:
+        JSON with keys: exists (bool), matched_name (str | null).
+    """
+    import httpx
+    from bs4 import BeautifulSoup
+
+    url = "https://fbref.com/search/search.fcgi"
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; ScoutBot/1.0)"}
+    params = {"search": player_name, "pid": "search"}
+
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=10) as client:
+            r = await client.get(url, headers=headers, params=params)
+
+        # FBref redirects directly to the player page on an exact match
+        if "/players/" in str(r.url):
+            return json.dumps({"exists": True, "matched_name": player_name})
+
+        # Parse search results page for a close name match
+        soup = BeautifulSoup(r.text, "html.parser")
+        for item in soup.select("div.search-item-name"):
+            text = item.get_text(strip=True)
+            if player_name.lower() in text.lower():
+                return json.dumps({"exists": True, "matched_name": text})
+
+        return json.dumps({"exists": False, "matched_name": None})
+
+    except Exception as exc:
+        return json.dumps({"exists": False, "matched_name": None, "error": str(exc)})
+
+
 # ── Entry Point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     mcp.settings.host = "0.0.0.0"

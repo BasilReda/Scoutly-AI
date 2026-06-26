@@ -4,11 +4,8 @@ import json
 from typing import Any
 
 from openai import AsyncOpenAI
-from mcp import ClientSession
-from mcp.client.sse import sse_client
 
 from .base import BaseAgent
-from ..utils.config import settings
 from ..utils.prompt_loader import PromptLoader
 
 
@@ -18,58 +15,7 @@ class ScouterAgent(BaseAgent):
     def __init__(self, client: AsyncOpenAI, sse_queue: asyncio.Queue):
         super().__init__(client, sse_queue)
 
-    # ── MCP Communication ─────────────────────────────────────────────────────
-
-    async def _call_mcp_tool(self, tool_name: str, params: dict) -> Any:
-        """Connect to the MCP server and call a single tool."""
-        mcp_url = settings.MCP_SERVER_URL
-        result_data: Any = None
-
-        try:
-            async with sse_client(mcp_url) as (read, write):
-                async with ClientSession(read, write) as session:
-                    await session.initialize()
-                    result = await session.call_tool(tool_name, params)
-                    if result.content:
-                        if len(result.content) == 1:
-                            # Single-item result (dict, str, int, …)
-                            raw = result.content[0].text
-                            try:
-                                result_data = json.loads(raw)
-                            except (json.JSONDecodeError, TypeError):
-                                try:
-                                    import ast
-                                    result_data = ast.literal_eval(raw)
-                                except Exception:
-                                    result_data = raw
-                        else:
-                            # mcp >= 1.10 serialises list results as one block per item
-                            result_data = []
-                            for block in result.content:
-                                try:
-                                    result_data.append(json.loads(block.text))
-                                except (json.JSONDecodeError, TypeError):
-                                    try:
-                                        import ast
-                                        result_data.append(ast.literal_eval(block.text))
-                                    except Exception:
-                                        result_data.append(block.text)
-        except BaseException as exc:
-            # mcp >= 1.10 raises an ExceptionGroup during SSE connection cleanup,
-            # even when the tool call succeeded. If we already received data,
-            # the error is a benign teardown race — ignore it.
-            if result_data is not None:
-                return result_data
-            # Real failure: unwrap and surface the inner exception
-            inner: BaseException = exc
-            if hasattr(exc, "exceptions") and exc.exceptions:
-                inner = exc.exceptions[0]
-            raise RuntimeError(
-                f"MCP call '{tool_name}' to {mcp_url} failed — "
-                f"{type(inner).__name__}: {inner}"
-            ) from inner
-
-        return result_data
+    # _call_mcp_tool inherited from BaseAgent
 
     # ── Main Run ──────────────────────────────────────────────────────────────
 

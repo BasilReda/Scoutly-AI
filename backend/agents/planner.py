@@ -21,6 +21,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from .base import BaseAgent
 from .financial import FinancialAgent
 from .scouter import ScouterAgent
+from .verifier import VerifierAgent
 from .analysis import AnalysisAgent
 from .tactical import TacticalAgent
 from .email_agent import EmailAgent
@@ -55,6 +56,7 @@ class PlannerAgent(BaseAgent):
 
         self.financial = FinancialAgent(client, sse_queue)
         self.scouter = ScouterAgent(client, sse_queue)
+        self.verifier = VerifierAgent(client, sse_queue)
         self.analysis = AnalysisAgent(client, sse_queue)
         self.tactical = TacticalAgent(client, sse_queue)
         self.email = EmailAgent(client, sse_queue)
@@ -159,6 +161,29 @@ class PlannerAgent(BaseAgent):
                 res = pipeline_state["scouter"]
 
             players = res.get("players", [])
+
+            # ── FBref verification loop (automatic, before showing HITL) ──────
+            _MAX_VERIFY = 3
+            for _attempt in range(_MAX_VERIFY):
+                ver = await planner.verifier.run(players=players)
+                pipeline_state["verifier"] = ver
+                if ver["all_valid"]:
+                    break
+                if _attempt < _MAX_VERIFY - 1 and ver["invalid"]:
+                    _feedback_q = (
+                        f"{effective_query}\n\n"
+                        f"VERIFICATION FAILED — the following names do NOT exist on FBref "
+                        f"and must not be returned: {ver['invalid']}\n\n"
+                        f"{ver['feedback']}\n\n"
+                        f"Re-query the database and return only real, verified players."
+                    )
+                    res = await planner.scouter.run(query=_feedback_q, financial_decision=financial_decision)
+                    pipeline_state["scouter"] = res
+                    pipeline_state["_scout_cache"] = {"q": _feedback_q}
+                    pipeline_state["_scout_eff_query"] = _feedback_q
+                    effective_query = _feedback_q
+                    players = res.get("players", [])
+            # ─────────────────────────────────────────────────────────────────
 
             while True:
                 user_decision = interrupt({

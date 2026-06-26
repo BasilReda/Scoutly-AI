@@ -7,6 +7,8 @@ from typing import Any, AsyncGenerator
 
 from openai import AsyncAzureOpenAI
 from deepagents import create_deep_agent
+from mcp import ClientSession
+from mcp.client.sse import sse_client
 
 from ..utils.prompt_loader import PromptLoader
 from ..utils.config import settings, get_langchain_azure_llm
@@ -69,6 +71,55 @@ class BaseAgent(ABC):
 
     async def emit_error(self, message: str, error: str = "") -> None:
         await self.emit({"type": "error", "message": message, "error": error})
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # MCP Helper
+    # ─────────────────────────────────────────────────────────────────────────
+
+    async def _call_mcp_tool(self, tool_name: str, params: dict) -> Any:
+        """Connect to the MCP server and call a single tool."""
+        mcp_url = settings.MCP_SERVER_URL
+        result_data: Any = None
+
+        try:
+            async with sse_client(mcp_url) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    result = await session.call_tool(tool_name, params)
+                    if result.content:
+                        if len(result.content) == 1:
+                            raw = result.content[0].text
+                            try:
+                                result_data = json.loads(raw)
+                            except (json.JSONDecodeError, TypeError):
+                                try:
+                                    import ast
+                                    result_data = ast.literal_eval(raw)
+                                except Exception:
+                                    result_data = raw
+                        else:
+                            result_data = []
+                            for block in result.content:
+                                try:
+                                    result_data.append(json.loads(block.text))
+                                except (json.JSONDecodeError, TypeError):
+                                    try:
+                                        import ast
+                                        result_data.append(ast.literal_eval(block.text))
+                                    except Exception:
+                                        result_data.append(block.text)
+        except BaseException as exc:
+            if result_data is not None:
+                return result_data
+            inner: BaseException = exc
+            if hasattr(exc, "exceptions") and exc.exceptions:
+                inner = exc.exceptions[0]
+            raise RuntimeError(
+                f"MCP call '{tool_name}' to {mcp_url} failed — "
+                f"{type(inner).__name__}: {inner}"
+            ) from inner
+
+        return result_data
 
     # ─────────────────────────────────────────────────────────────────────────
     # LLM Helpers
