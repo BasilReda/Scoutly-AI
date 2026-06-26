@@ -39,7 +39,6 @@ class PlannerAgent(BaseAgent):
         run_id: str,
         hitl_queues: dict | None = None,
         player_selection_queues: dict | None = None,
-        email_events: dict | None = None,
         email_bodies: dict | None = None,
     ):
         super().__init__(client, sse_queue)
@@ -49,7 +48,6 @@ class PlannerAgent(BaseAgent):
         # outer astream loop reads them and resumes the graph via Command(resume=…)
         self._hitl_queues = hitl_queues or {}
         self._player_selection_queues = player_selection_queues or {}
-        self._email_events = email_events or {}
         self._email_bodies = email_bodies or {}
 
         self._stopped = False
@@ -162,7 +160,7 @@ class PlannerAgent(BaseAgent):
 
             players = res.get("players", [])
 
-            # ── FBref verification loop (automatic, before showing HITL) ──────
+            # ── Verification loop (automatic, no HITL) ────────────────────────
             _MAX_VERIFY = 3
             for _attempt in range(_MAX_VERIFY):
                 ver = await planner.verifier.run(players=players)
@@ -183,43 +181,7 @@ class PlannerAgent(BaseAgent):
                     pipeline_state["_scout_eff_query"] = _feedback_q
                     effective_query = _feedback_q
                     players = res.get("players", [])
-            # ─────────────────────────────────────────────────────────────────
 
-            while True:
-                user_decision = interrupt({
-                    "agent": "scouter",
-                    "action_type": "decision",
-                    "emit_data": {
-                        "player_count": len(players),
-                        "players_found": [p.get("name", "") for p in players[:5]],
-                        "position": players[0].get("position", "") if players else "",
-                    },
-                })
-
-                action = user_decision.get("action", "stop") if isinstance(user_decision, dict) else "stop"
-                comment = user_decision.get("comment", "") if isinstance(user_decision, dict) else ""
-
-                if action == "stop":
-                    planner._stopped = True
-                    return {**res, "stopped": True}
-                if action == "proceed":
-                    break
-                if action == "adjust":
-                    prev = pipeline_state.get("scouter", {})
-                    prev_names = [p.get("name", "") for p in prev.get("players", [])]
-                    adj_q = (
-                        f"{effective_query}\n\n"
-                        f"Previously found players: {prev_names}\n\n"
-                        f"User adjustment: {comment}"
-                    )
-                    adj_cache = {"q": adj_q}
-                    if pipeline_state.get("_scout_cache") != adj_cache:
-                        res = await planner.scouter.run(query=adj_q, financial_decision=financial_decision)
-                        pipeline_state["scouter"] = res
-                        pipeline_state["_scout_cache"] = adj_cache
-                        pipeline_state["_scout_eff_query"] = adj_q
-                        effective_query = adj_q
-                        players = res.get("players", [])
             return res
 
         # ── Tool: Analysis Agent ───────────────────────────────────────────────
@@ -244,35 +206,6 @@ class PlannerAgent(BaseAgent):
             else:
                 res = pipeline_state["analysis"]
 
-            while True:
-                user_decision = interrupt({
-                    "agent": "analysis",
-                    "action_type": "decision",
-                    "emit_data": {
-                        "charts_generated": len(res.get("charts", [])),
-                        "report_preview": str(res.get("unified_report", ""))[:300],
-                    },
-                })
-
-                action = user_decision.get("action", "stop") if isinstance(user_decision, dict) else "stop"
-                comment = user_decision.get("comment", "") if isinstance(user_decision, dict) else ""
-
-                if action == "stop":
-                    planner._stopped = True
-                    return {**res, "stopped": True}
-                if action == "proceed":
-                    break
-                if action == "adjust":
-                    new_extra = (extra + f"\nUser focus: {comment}").strip()
-                    new_cache = {"count": len(players), "extra": new_extra}
-                    if pipeline_state.get("_analysis_cache") != new_cache:
-                        res = await planner.analysis.run(
-                            players=players, run_id=planner.run_id, extra_context=new_extra
-                        )
-                        pipeline_state["analysis"] = res
-                        pipeline_state["_analysis_cache"] = new_cache
-                        pipeline_state["_analysis_extra"] = new_extra
-                        extra = new_extra
             return res
 
         # ── Tool: Tactical Agent ───────────────────────────────────────────────
@@ -300,46 +233,7 @@ class PlannerAgent(BaseAgent):
 
             ranked = res.get("ranked_players", [])
 
-            # HITL decision with optional adjustment loop
-            while True:
-                user_decision = interrupt({
-                    "agent": "tactical",
-                    "action_type": "decision",
-                    "emit_data": {
-                        "ranked_players": [
-                            {
-                                "name": p.get("name"),
-                                "rank": p.get("rank"),
-                                "tactical_fit_score": p.get("tactical_fit_score"),
-                            }
-                            for p in ranked[:3]
-                        ],
-                        "tactical_summary_preview": str(res.get("tactical_summary", ""))[:200],
-                    },
-                })
-
-                action = user_decision.get("action", "stop") if isinstance(user_decision, dict) else "stop"
-                comment = user_decision.get("comment", "") if isinstance(user_decision, dict) else ""
-
-                if action == "stop":
-                    planner._stopped = True
-                    return {**res, "stopped": True}
-                if action == "proceed":
-                    break
-                if action == "adjust":
-                    adj_report = f"{effective_report}\n\nUser tactical preference: {comment}"
-                    new_cache = {"rlen": len(adj_report), "count": len(players)}
-                    if pipeline_state.get("_tact_cache") != new_cache:
-                        res = await planner.tactical.run(
-                            players=players, analysis_report=adj_report, financial_decision=financial_decision
-                        )
-                        pipeline_state["tactical"] = res
-                        pipeline_state["_tact_cache"] = new_cache
-                        pipeline_state["_tact_eff_report"] = adj_report
-                        effective_report = adj_report
-                        ranked = res.get("ranked_players", [])
-
-            # Player selection (separate interrupt after HITL decision)
+            # Player selection interrupt — user picks from ranked cards
             top_3 = ranked[:3]
             card_data = [
                 {
@@ -371,7 +265,7 @@ class PlannerAgent(BaseAgent):
 
         @tool
         async def run_email_agent(player_name: str) -> dict:
-            """Generate a formal recruitment email for the selected player and send after user confirms."""
+            """Generate a recruitment email, show to user, allow adjustment or send."""
             if planner._stopped:
                 return {"stopped": True, "sent": False}
 
@@ -379,43 +273,53 @@ class PlannerAgent(BaseAgent):
             player_data = next((p for p in ranked if p.get("name") == player_name), {})
             financial_decision = pipeline_state.get("financial", {})
 
-            res = await planner.email.run(
-                player_name=player_name,
-                player_data=player_data,
-                financial_decision=financial_decision,
-                run_id=planner.run_id,
-            )
+            previous_draft = ""
 
-            email_event = planner._email_events.get(planner.run_id)
-            if email_event:
-                email_event.clear()
+            while True:
+                extra = ""
+                if previous_draft and pipeline_state.get("_email_adj"):
+                    extra = (
+                        f"Previous draft for reference:\n{previous_draft}\n\n"
+                        f"User requested this adjustment: {pipeline_state['_email_adj']}\n"
+                        f"Revise the email incorporating this feedback. Keep the salary unchanged."
+                    )
 
-            await planner.emit({
-                "type": "email_draft_ready",
-                "agent": "email",
-                "message": "Recruitment email draft ready — review and confirm sending",
-                "data": {
-                    "draft": res["draft"],
-                    "subject": res["subject"],
-                    "to": res["to"],
-                    "from": res["from"],
-                    "player_name": player_name,
-                },
-                "run_id": planner.run_id,
-            })
+                res = await planner.email.run(
+                    player_name=player_name,
+                    player_data=player_data,
+                    financial_decision=financial_decision,
+                    run_id=planner.run_id,
+                    extra_context=extra,
+                )
+                previous_draft = res["draft"]
 
-            if email_event:
-                try:
-                    await asyncio.wait_for(email_event.wait(), timeout=600.0)
-                except asyncio.TimeoutError:
-                    await planner.emit_progress("Email confirmation timed out — skipping send.")
-                    return {**res, "sent": False, "reason": "timeout"}
+                user_decision = interrupt({
+                    "agent": "email",
+                    "action_type": "email_decision",
+                    "emit_data": {
+                        "draft": res["draft"],
+                        "subject": res["subject"],
+                        "to": res["to"],
+                        "from": res["from"],
+                        "player_name": player_name,
+                    },
+                })
 
-            final_body = planner._email_bodies.get(planner.run_id, res["draft"])
-            sent = await planner.email.send(to=res["to"], subject=res["subject"], body=final_body)
-            result = {**res, "final_body": final_body, "sent": sent}
-            pipeline_state["email"] = result
-            return result
+                action = user_decision.get("action", "send") if isinstance(user_decision, dict) else "send"
+                comment = user_decision.get("comment", "") if isinstance(user_decision, dict) else ""
+
+                if action == "stop":
+                    planner._stopped = True
+                    return {**res, "sent": False, "stopped": True}
+                elif action == "adjust" and comment:
+                    pipeline_state["_email_adj"] = comment
+                    continue
+                else:  # "send"
+                    final_body = planner._email_bodies.get(planner.run_id, res["draft"])
+                    sent = await planner.email.send(to=res["to"], subject=res["subject"], body=final_body)
+                    result = {**res, "final_body": final_body, "sent": sent}
+                    pipeline_state["email"] = result
+                    return result
 
         # ── Tool: PDF Report ───────────────────────────────────────────────────
 
@@ -577,8 +481,33 @@ class PlannerAgent(BaseAgent):
 
                     current_input = Command(resume=selected)
 
-                else:  # HITL decision: proceed / stop / adjust
-                    # Emit HITL card SSE (only once per real interrupt pause)
+                elif action_type == "email_decision":
+                    # Emit email draft SSE, wait for send or adjustment
+                    await self.emit({
+                        "type": "email_draft_ready",
+                        "agent": "email",
+                        "message": "Recruitment email draft ready — send or request adjustments",
+                        "data": emit_data,
+                        "run_id": self.run_id,
+                    })
+
+                    hitl_queue = self._hitl_queues.get(self.run_id)
+                    user_input = {"action": "send", "comment": ""}
+
+                    if hitl_queue:
+                        while not hitl_queue.empty():
+                            try:
+                                hitl_queue.get_nowait()
+                            except asyncio.QueueEmpty:
+                                break
+                        try:
+                            user_input = await asyncio.wait_for(hitl_queue.get(), timeout=600.0)
+                        except asyncio.TimeoutError:
+                            await self.emit_progress("Email confirmation timed out — sending as-is.")
+
+                    current_input = Command(resume=user_input)
+
+                else:  # HITL decision (financial only)
                     await self.emit({
                         "type": "human_decision_required",
                         "agent": agent_name,
@@ -591,7 +520,6 @@ class PlannerAgent(BaseAgent):
                     user_input = {"action": "proceed", "comment": ""}
 
                     if hitl_queue:
-                        # Drain any stale items leftover from a previous round
                         while not hitl_queue.empty():
                             try:
                                 hitl_queue.get_nowait()

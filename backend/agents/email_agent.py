@@ -37,6 +37,7 @@ class EmailAgent(BaseAgent):
         player_data: dict,
         financial_decision: dict,
         run_id: str,
+        extra_context: str = "",
         **kwargs,
     ) -> dict[str, Any]:
         """Generate a formal recruitment email draft via deepagents."""
@@ -46,7 +47,7 @@ class EmailAgent(BaseAgent):
         salary_max = financial_decision.get("salary_max", 0)
         salary_offer = f"€{salary_max:,}/week" if salary_max else "to be discussed"
         position = player_data.get("position", "the position")
-        team_name = financial_decision.get("team_name", "FC Antigravity")
+        team_name = financial_decision.get("team_name", "البط الكيني")
         age = player_data.get("age", "")
         club = player_data.get("club", "")
 
@@ -63,6 +64,9 @@ class EmailAgent(BaseAgent):
             "Do not substitute, round, or invent a different salary figure.\n\n"
             "First line must be: Subject: <subject>\nThen a blank line, then the email body."
         )
+
+        if extra_context:
+            task_message += f"\n\n{extra_context}"
 
         # Use deepagents framework (via BaseAgent._run_deep_agent)
         raw = await self._run_deep_agent(task_message=task_message, tools=[])

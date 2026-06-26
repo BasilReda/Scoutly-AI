@@ -159,7 +159,7 @@ class PDFGenerator:
             query=query,
             run_id=run_id,
             generated_at=datetime.now().strftime("%d %B %Y, %H:%M"),
-            team_name=financial_decision.get("team_name", "FC Antigravity"),
+            team_name=financial_decision.get("team_name", "البط الكيني"),
             ranked_players=ranked_players,
             financial_decision=financial_decision,
             tactical_summary=tactical_summary,

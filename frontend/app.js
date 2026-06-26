@@ -9,6 +9,7 @@ const AGENT_CONFIG = {
   planner:       { icon: '🧠', label: 'Planner',   pipeId: 'pipe-planner' },
   financial:     { icon: '💰', label: 'Financial', pipeId: 'pipe-financial' },
   scouter:       { icon: '🔍', label: 'Scouter',   pipeId: 'pipe-scouter' },
+  verifier:      { icon: '✅', label: 'Verifier',  pipeId: 'pipe-verifier' },
   analysis:      { icon: '📊', label: 'Analysis',  pipeId: 'pipe-analysis' },
   tactical:      { icon: '⚔️', label: 'Tactical',  pipeId: 'pipe-tactical' },
   email:         { icon: '✉️', label: 'Email',     pipeId: 'pipe-email' },
@@ -119,6 +120,11 @@ function renderEvent(event) {
 
   const ts = event.timestamp ? formatTime(event.timestamp) : new Date().toLocaleTimeString();
 
+  const staticMessage = {
+    agent_start:    `Delegating task to ${cfg.label} agent...`,
+    agent_complete: `${cfg.label} agent has finished.`,
+  }[type] || event.message || '';
+
   const el = document.createElement('div');
   el.className = 'feed-event';
   el.innerHTML = `
@@ -129,7 +135,7 @@ function renderEvent(event) {
         <span class="event-type-badge ${badgeClass}">${badgeLabel}</span>
         <span class="event-timestamp">${ts}</span>
       </div>
-      <div class="event-message">${escapeHtml(event.message || '')}</div>
+      <div class="event-message">${escapeHtml(staticMessage)}</div>
       ${dataHtml}
     </div>`;
 
@@ -324,6 +330,15 @@ function renderEmailPreview(event) {
     <div class="email-actions">
       <button class="btn-send-email" onclick="sendEmail(this)">Send Email ✉️</button>
       <span class="email-hint">You can edit the draft above before sending</span>
+    </div>
+    <div class="email-adjust-section">
+      <textarea
+        class="email-adjust-textarea"
+        id="email-adj-${currentRunId}"
+        placeholder="Request an adjustment (e.g. 'make it more formal', 'add a line about our Champions League ambitions') — then click Re-draft"
+        rows="2"
+      ></textarea>
+      <button class="btn-redraft-email" onclick="redraftEmail(this)">↺ Re-draft</button>
     </div>`;
 
   feed.appendChild(card);
@@ -346,6 +361,30 @@ function sendEmail(btn) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email_body: body }),
+  }).catch(console.error);
+}
+
+function redraftEmail(btn) {
+  if (!currentRunId) return;
+
+  const adjTextarea = document.getElementById(`email-adj-${currentRunId}`);
+  const comment = adjTextarea ? adjTextarea.value.trim() : '';
+  if (!comment) {
+    adjTextarea && adjTextarea.focus();
+    return;
+  }
+
+  const card = document.getElementById(`email-preview-${currentRunId}`);
+  if (card) {
+    card.classList.add('sent'); // dim the old card
+    btn.textContent = '⟳ Re-drafting...';
+    btn.disabled = true;
+  }
+
+  fetch(`/api/scout/${currentRunId}/decision`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'adjust', comment }),
   }).catch(console.error);
 }
 
@@ -454,10 +493,16 @@ async function startScouting() {
 
 // ── Event Handler ─────────────────────────────────────────────────────────────
 
+// Whitelist: only these types ever appear as feed items
+const FEED_TYPES = new Set([
+  'agent_start', 'agent_complete', 'error', 'pipeline_error',
+  'pipeline_complete', 'pipeline_stopped', 'email_sent',
+]);
+
 function handleEvent(event) {
   const type = event.type;
 
-  // Capture run ID on first event
+  // Capture run ID from any event (runs before filters)
   if (event.run_id && !currentRunId) {
     currentRunId = event.run_id;
     const runDisplay = document.getElementById('runIdDisplay');
@@ -465,7 +510,7 @@ function handleEvent(event) {
     runDisplay.style.display = 'inline-flex';
   }
 
-  // Update pipeline agent status
+  // Pipeline indicator — must update regardless of feed visibility
   if (event.agent && type === 'agent_start') {
     updatePipelineAgent(event.agent, 'active');
   } else if (event.agent && type === 'agent_complete') {
@@ -474,37 +519,34 @@ function handleEvent(event) {
     updatePipelineAgent(event.agent, 'error');
   }
 
-  // Intercept special interactive event types — render custom UI instead of generic feed item
-  if (type === 'human_decision_required') {
-    renderDecisionCard(event);
+  // Side effects that must fire regardless of feed visibility
+  if (type === 'pipeline_complete' && event.run_id) {
+    showDownloadPanel(event);
+  }
+  if (type === 'stream_end' || type === 'timeout') {
+    resetScoutBtn();
     return;
   }
-  if (type === 'player_selection_required') {
-    renderPlayerSelectionCards(event);
-    return;
-  }
+
+  // Interactive cards — custom UI, skip generic feed item
+  if (type === 'human_decision_required') { renderDecisionCard(event); return; }
+  if (type === 'player_selection_required') { renderPlayerSelectionCards(event); return; }
   if (type === 'email_draft_ready') {
     updatePipelineAgent('email', 'active');
+    const prev = document.getElementById(`email-preview-${currentRunId}`);
+    if (prev) prev.remove();
     renderEmailPreview(event);
     return;
   }
   if (type === 'email_sent') {
     updatePipelineAgent('email', 'done');
-    // fall through to renderEvent for the confirmation message
+    // falls through to renderEvent below
   }
 
-  // Generic feed item
+  // Drop everything not in the whitelist
+  if (!FEED_TYPES.has(type)) return;
+
   renderEvent(event);
-
-  // Pipeline complete → show download panel
-  if (type === 'pipeline_complete' && event.run_id) {
-    showDownloadPanel(event);
-  }
-
-  // Stream end / timeout → re-enable button
-  if (type === 'stream_end' || type === 'timeout') {
-    resetScoutBtn();
-  }
 }
 
 // ── Download Panel ────────────────────────────────────────────────────────────

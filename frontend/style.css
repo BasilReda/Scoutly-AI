@@ -63,12 +63,43 @@ body {
   align-items: center;
   gap: 10px;
   font-weight: 700;
-  font-size: 15px;
+  font-size: 20px;
   color: white;
 }
 
-.nav-icon { font-size: 20px; }
-.brand-accent { color: var(--accent); }
+.nav-icon { font-size: 22px; }
+.brand-accent { color: var(--accent); font-size: 22px; font-weight: 800; }
+
+.nav-logo {
+  height: 36px;
+  width: 36px;
+  object-fit: contain;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.08);
+  padding: 2px;
+}
+
+.hero-team-name {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  font-size: clamp(2.4rem, 6vw, 4.5rem);
+  font-weight: 900;
+  color: var(--accent);
+  text-align: center;
+  letter-spacing: 0.02em;
+  margin: 8px 0 4px;
+  text-shadow: 0 0 40px rgba(0, 212, 170, 0.35);
+  direction: rtl;
+}
+
+.hero-logo {
+  height: clamp(60px, 8vw, 100px);
+  width: clamp(60px, 8vw, 100px);
+  object-fit: contain;
+  filter: drop-shadow(0 0 16px rgba(0, 212, 170, 0.4));
+}
 
 .nav-links { display: flex; gap: 28px; }
 
@@ -987,6 +1018,39 @@ body {
   color: var(--muted);
 }
 .email-preview-card.sent { opacity: 0.6; pointer-events: none; }
+.email-adjust-section {
+  margin-top: 14px;
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  border-top: 1px solid var(--border);
+  padding-top: 14px;
+}
+.email-adjust-textarea {
+  flex: 1;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 13px;
+  padding: 8px 12px;
+  resize: vertical;
+  font-family: inherit;
+}
+.email-adjust-textarea:focus { outline: none; border-color: var(--accent); }
+.btn-redraft-email {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 13px;
+  padding: 8px 14px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 0.2s, color 0.2s;
+}
+.btn-redraft-email:hover { border-color: var(--accent); color: var(--accent); }
+.btn-redraft-email:disabled { opacity: 0.5; cursor: not-allowed; }
 .badge-decision  { background: rgba(245,158,11,0.2);  color: var(--gold); }
 .badge-selection { background: rgba(167,139,250,0.2); color: var(--purple); }
 .badge-email     { background: rgba(0,212,170,0.15);  color: var(--accent); }

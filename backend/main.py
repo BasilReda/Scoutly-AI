@@ -59,8 +59,7 @@ run_hitl_queues: dict[str, asyncio.Queue] = {}
 # Player selection: queue item is the selected player name (str)
 run_player_selection_queues: dict[str, asyncio.Queue] = {}
 
-# Email confirmation: Event + body string (one-shot, no loop needed)
-run_email_events: dict[str, asyncio.Event] = {}
+# Email body: stored here so the planner can read the user-edited body on send
 run_email_bodies: dict[str, str] = {}
 
 
@@ -130,10 +129,10 @@ async def select_player(run_id: str, body: PlayerSelectionRequest):
 
 @app.post("/api/scout/{run_id}/send-email")
 async def send_email_confirm(run_id: str, body: SendEmailRequest):
-    if run_id not in run_email_events:
-        raise HTTPException(status_code=404, detail="Run not found or email already sent.")
+    if run_id not in run_hitl_queues:
+        raise HTTPException(status_code=404, detail="Run not found or already completed.")
     run_email_bodies[run_id] = body.email_body
-    run_email_events[run_id].set()
+    await run_hitl_queues[run_id].put({"action": "send", "comment": ""})
     return {"status": "ok"}
 
 
@@ -158,7 +157,6 @@ async def scout_players(request: Request):
         # Register coordination state for this run
         run_hitl_queues[run_id] = asyncio.Queue()
         run_player_selection_queues[run_id] = asyncio.Queue()
-        run_email_events[run_id] = asyncio.Event()
 
         yield f"data: {json.dumps({'type': 'connected', 'run_id': run_id, 'query': query})}\n\n"
 
@@ -170,7 +168,6 @@ async def scout_players(request: Request):
                     run_id=run_id,
                     hitl_queues=run_hitl_queues,
                     player_selection_queues=run_player_selection_queues,
-                    email_events=run_email_events,
                     email_bodies=run_email_bodies,
                 )
                 result = await planner.run(query=query)
@@ -208,7 +205,6 @@ async def scout_players(request: Request):
         finally:
             run_hitl_queues.pop(run_id, None)
             run_player_selection_queues.pop(run_id, None)
-            run_email_events.pop(run_id, None)
             run_email_bodies.pop(run_id, None)
 
     return StreamingResponse(
